@@ -297,13 +297,10 @@ app.registerExtension({
                 }
 
                 // 4. Trash — delete row immediately on mousedown.
-                //    (LiteGraph does not reliably fire onMouseUp for quick clicks,
-                //     so a mouseup-based approach fails for tap-to-delete.)
                 if (x >= C.TRASH.x && x < C.TRASH.x + C.TRASH.w) {
                     data.splice(i, 1);
                     this.properties.lora_data = JSON.stringify(data);
                     syncToBackend(this);
-                    // Shrink height for the removed row; preserve current width
                     const sz = this.computeSize();
                     this.setSize([Math.max(sz[0], this.size[0]), sz[1]]);
                     this.setDirtyCanvas(true, true);
@@ -320,6 +317,42 @@ app.registerExtension({
                             startVal: data[i][col.key],
                             moved:    false
                         };
+
+                        // Register a one-shot pointerup on *document* in
+                        // the capture phase so the prompt opens instantly on
+                        // mouse release.  LiteGraph registers its own pointerup
+                        // on the canvas element (also capture phase) and calls
+                        // stopPropagation, which blocks bubble-phase listeners.
+                        // By listening on document (an ancestor) in the capture
+                        // phase, our handler fires first.
+                        const node = this;
+                        const onPointerUp = (evt) => {
+                            document.removeEventListener("pointerup", onPointerUp, true);
+                            if (node.slidingNumber && !node.slidingNumber.moved) {
+                                const { rowIdx, key } = node.slidingNumber;
+                                node.slidingNumber = null;
+                                let pdata = JSON.parse(node.properties.lora_data || "[]");
+                                if (canvas && typeof canvas.prompt === "function") {
+                                    canvas.prompt("Value", pdata[rowIdx][key], (v) => {
+                                        const parsed = parseFloat(v);
+                                        if (!isNaN(parsed)) {
+                                            pdata = JSON.parse(node.properties.lora_data || "[]");
+                                            if (pdata[rowIdx]) {
+                                                pdata[rowIdx][key] = parsed;
+                                                node.properties.lora_data = JSON.stringify(pdata);
+                                                syncToBackend(node);
+                                                node.setDirtyCanvas(true);
+                                            }
+                                        }
+                                    }, evt);
+                                }
+                            } else if (node.slidingNumber) {
+                                // Drag finished — just clear state
+                                node.slidingNumber = null;
+                            }
+                        };
+                        document.addEventListener("pointerup", onPointerUp, { capture: true, once: true });
+
                         return true;
                     }
                 }
@@ -336,13 +369,11 @@ app.registerExtension({
             this._lastMousePos = local_pos;
             const [x, y] = local_pos;
 
-            // ── Implicit mouseup detection ──
-            // LiteGraph does NOT call onMouseUp on the node after a quick
-            // click (mousedown -> mouseup with no/minimal drag).  It does,
-            // however, keep calling onMouseMove.  We detect that the mouse
-            // button has been released by checking e.buttons === 0 while
-            // our state trackers are still active, and treat it as a
-            // synthetic mouseup.
+            // ── Implicit mouseup detection (fallback) ──
+            // The primary mouseup handling is done via a pointerup listener
+            // registered in onMouseDown.  This block is a safety-net fallback
+            // that clears stale state if the pointerup listener didn't fire
+            // for any reason (e.g. pointer left the canvas).
             if (e.buttons === 0) {
 
                 // Grip drag was active but button is released -> stop dragging
@@ -351,33 +382,11 @@ app.registerExtension({
                     return;
                 }
 
-                // Number slider was active but button is released
+                // Number slider was active but button is released.
+                // The pointerup listener (registered in onMouseDown)
+                // handles the popup, so just clean up here as a fallback.
                 if (this.slidingNumber !== null) {
-                    if (!this.slidingNumber.moved) {
-                        // User quick-clicked a number cell without dragging.
-                        // Open a text prompt so they can type an exact value.
-                        const { rowIdx, key } = this.slidingNumber;
-                        this.slidingNumber = null; // clear BEFORE prompt
-
-                        let data = JSON.parse(this.properties.lora_data || "[]");
-                        if (canvas && typeof canvas.prompt === "function") {
-                            canvas.prompt("Value", data[rowIdx][key], (v) => {
-                                const parsed = parseFloat(v);
-                                if (!isNaN(parsed)) {
-                                    // Re-read in case data changed while prompt was open
-                                    data = JSON.parse(this.properties.lora_data || "[]");
-                                    if (data[rowIdx]) {
-                                        data[rowIdx][key] = parsed;
-                                        this.properties.lora_data = JSON.stringify(data);
-                                        syncToBackend(this);
-                                        this.setDirtyCanvas(true);
-                                    }
-                                }
-                            }, e);
-                        }
-                    } else {
-                        this.slidingNumber = null;
-                    }
+                    this.slidingNumber = null;
                     return;
                 }
 
@@ -429,11 +438,9 @@ app.registerExtension({
         //  Mouse Up
         // ─────────────────────────────────────────────
         //
-        // LiteGraph only calls onMouseUp on the node reliably when there
-        // was a real drag (mouse moved while button held).  For quick
-        // clicks the cleanup happens in onMouseMove above via the
-        // e.buttons===0 check.  This handler is a safety net for the
-        // drag case and ensures state is always cleared.
+        // Safety-net cleanup.  The primary mouseup handling (prompt on
+        // clean click, clear after drag) is done by the pointerup
+        // listener registered in onMouseDown.
 
         nodeType.prototype.onMouseUp = function () {
             if (this.slidingNumber !== null) {
@@ -480,7 +487,7 @@ app.registerExtension({
                 const row = slot.widget._loraRow;
                 new LiteGraph.ContextMenu(
                     [{ content: "ℹ️ Show LoRA Info", callback: () => showLoraInfo(row.lora) }],
-                    { event: app.canvas.last_mouse_event || window.event, title: row.lora.split(/[\\/]/).pop() }
+                    { event: app.canvas.last_mouse_event || window.event, title: row.lora.replace(/\.[^.]+$/, "") }
                 );
                 return undefined;
             }
@@ -579,14 +586,13 @@ app.registerExtension({
                     ctx.globalAlpha = 1.0;
                 }
                 ctx.textAlign = "left";
-                const rawName = row.lora.split(/[\\/]/).pop();
-                // Use actual text measurement instead of character estimation
+                const rawName = row.lora.replace(/\.[^.]+$/, ""); // strip extension, keep subpath
                 const availableWidth = C.NAME.w - 5;  // Leave 5px right margin
                 let displayName = rawName;
                 if (ctx.measureText(rawName).width > availableWidth) {
-                    // Truncate and add ellipsis, measuring as we go
-                    for (let len = rawName.length - 1; len > 0; len--) {
-                        const truncated = rawName.substring(0, len) + "…";
+                    // Truncate from the LEFT so the filename stays visible
+                    for (let start = 1; start < rawName.length; start++) {
+                        const truncated = "…" + rawName.substring(start);
                         if (ctx.measureText(truncated).width <= availableWidth) {
                             displayName = truncated;
                             break;
