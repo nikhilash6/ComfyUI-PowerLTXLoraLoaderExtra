@@ -278,6 +278,19 @@ function injectStyles() {
     background: rgba(255, 255, 255, 0.15);
     color: #fff;
 }
+
+/* ── Info Badge ── */
+
+.pltx-info-badge {
+    color: #888;
+    font-size: 10px;
+    margin-left: 2px;
+    cursor: pointer;
+}
+
+.pltx-info-badge.pltx-info-civitai {
+    color: #4CAF50;
+}
 `;
     document.head.appendChild(style);
 }
@@ -355,20 +368,25 @@ app.registerExtension({
         // ─────────────────────────────────────────────
 
         let _RgthreeLoraInfoDialog = null;
+        let _LoraInfoService = null;
+        const getLoraInfoService = async () => {
+            if (!_LoraInfoService) {
+                try {
+                    const mod = await import("/rgthree/common/model_info_service.js");
+                    _LoraInfoService = mod.LORA_INFO_SERVICE;
+                } catch (err) {
+                    console.warn("[PowerLTX] rgthree-comfy LoRA info service not available:", err);
+                }
+            }
+            return _LoraInfoService;
+        };
         const showLoraInfo = async (loraName) => {
             if (!_RgthreeLoraInfoDialog) {
-                const origRegister = app.registerExtension.bind(app);
-                app.registerExtension = function(ext) {
-                    try { return origRegister(ext); }
-                    catch (e) { if (!String(e).includes("already registered")) throw e; }
-                };
                 try {
-                    const mod = await import("/rgthree/comfyui/dialog_info.js");
+                    const mod = await import("/extensions/rgthree-comfy/dialog_info.js");
                     _RgthreeLoraInfoDialog = mod.RgthreeLoraInfoDialog;
                 } catch (err) {
                     console.warn("[PowerLTX] rgthree-comfy LoRA info dialog not available:", err);
-                } finally {
-                    app.registerExtension = origRegister;
                 }
                 if (!_RgthreeLoraInfoDialog) return;
             }
@@ -624,6 +642,26 @@ app.registerExtension({
             const bdi = document.createElement("bdi");
             bdi.textContent = displayName;
             nameEl.appendChild(bdi);
+
+            // ── Info badge (async) ──
+            if (row.lora && row.lora !== "None") {
+                getLoraInfoService().then(svc => {
+                    if (!svc) return;
+                    svc.getInfo(row.lora, false, true).then(info => {
+                        if (!info?.raw?.civitai && !info?.hasInfoFile) return;
+                        const badge = document.createElement("span");
+                        badge.className = "pltx-info-badge";
+                        badge.textContent = " \u24D8";  // circled i
+                        badge.title = info?.raw?.civitai
+                            ? "Civitai info available"
+                            : "Local info available";
+                        if (info?.raw?.civitai) {
+                            badge.classList.add("pltx-info-civitai");
+                        }
+                        bdi.appendChild(badge);
+                    });
+                });
+            }
 
             nameEl.addEventListener("click", (e) => {
                 e.stopPropagation();
