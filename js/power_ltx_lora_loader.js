@@ -11,6 +11,11 @@ import { app } from "../../scripts/app.js";
 //  Data model: all LoRA rows are stored as a JSON string in
 //  node.properties.lora_data.  A hidden "lora_data" widget bridges
 //  the data to the Python backend for serialization.
+//
+//  LTX mode: when enabled, shows per-layer strength columns
+//  (Vid, V2A, Aud, A2V, Other) for LTX2-specific LoRA control.
+//  When disabled, only the STR column is shown and LoRAs are
+//  applied uniformly via ComfyUI's standard loader.
 // ═══════════════════════════════════════════════════════════════
 
 // ─────────────────────────────────────────────
@@ -51,7 +56,7 @@ function injectStyles() {
 
 .pltx-header-spacer {
     flex: 1 1 0;
-    min-width: 190px;
+    min-width: 125px;
 }
 
 .pltx-col-label {
@@ -77,12 +82,38 @@ function injectStyles() {
     color: #888;
     font-size: 13px;
     cursor: pointer;
-    margin-left: 4px;
+    margin-right: 2px;
     line-height: 1;
 }
 .pltx-cog-btn:hover {
     background: #3a3a3a;
     color: #bbb;
+}
+
+/* ── LTX Toggle ── */
+
+.pltx-ltx-toggle {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 6px;
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: bold;
+    color: #888;
+}
+
+.pltx-ltx-toggle input[type="checkbox"] {
+    width: 12px;
+    height: 12px;
+    margin: 0;
+    cursor: pointer;
+    accent-color: #4CAF50;
+}
+
+.pltx-ltx-toggle.pltx-ltx-active {
+    color: #4CAF50;
 }
 
 /* ── Row Container ── */
@@ -277,11 +308,47 @@ app.registerExtension({
             { key: "other", label: "Other" },
         ];
 
+        /** STR-only column list for standard (non-LTX) mode */
+        const STD_DEFS = [NUM_DEFS[0]];
+
         /** Creates a default empty LoRA row */
         const makeEmptyRow = () => ({
             on: true, lora: "None",
             str: 1.0, vid: 1.0, v2a: 1.0, aud: 1.0, a2v: 1.0, other: 1.0
         });
+
+        // ─────────────────────────────────────────────
+        //  LTX Mode Helpers
+        // ─────────────────────────────────────────────
+
+        /**
+         * Reads the current ltx_mode value from the hidden widget.
+         * @param {LGraphNode} node
+         * @returns {boolean}
+         */
+        const getLtxMode = (node) => {
+            const w = node.widgets?.find(w => w.name === "ltx_mode");
+            return w ? w.value : false;
+        };
+
+        /**
+         * Sets the ltx_mode value on the hidden widget.
+         * @param {LGraphNode} node
+         * @param {boolean} val
+         */
+        const setLtxMode = (node, val) => {
+            const w = node.widgets?.find(w => w.name === "ltx_mode");
+            if (w) w.value = val;
+        };
+
+        /**
+         * Returns the column definitions to display based on LTX mode.
+         * @param {LGraphNode} node
+         * @returns {Array}
+         */
+        const getVisibleNumDefs = (node) => {
+            return getLtxMode(node) ? NUM_DEFS : STD_DEFS;
+        };
 
         // ─────────────────────────────────────────────
         //  rgthree LoRA Info Dialog (lazy-loaded)
@@ -314,11 +381,7 @@ app.registerExtension({
 
         /**
          * Wrapper around canvas.prompt() that adds outside-click-to-close
-         * behavior for Nodes 2.0.  LiteGraph's built-in close handler only
-         * fires when the click target is the literal <canvas> element, but
-         * in the Vue renderer, clicks on node DOM elements never reach the
-         * canvas.  This wrapper adds a document-level listener that closes
-         * the dialog when any click lands outside it.
+         * behavior for Nodes 2.0.
          *
          * @param {string}   title    - Dialog title
          * @param {*}        value    - Initial value
@@ -335,14 +398,12 @@ app.registerExtension({
             // Add outside-click close for Nodes 2.0 compatibility
             setTimeout(() => {
                 const onOutsideClick = (e) => {
-                    // Don't close if click is inside the dialog itself
                     if (dialog.contains(e.target)) return;
                     dialog.close();
                     document.removeEventListener("pointerdown", onOutsideClick, true);
                 };
                 document.addEventListener("pointerdown", onOutsideClick, true);
 
-                // Also clean up when the dialog closes normally (Enter, Escape, OK button)
                 const origClose = dialog.close.bind(dialog);
                 dialog.close = () => {
                     document.removeEventListener("pointerdown", onOutsideClick, true);
@@ -383,8 +444,8 @@ app.registerExtension({
          */
         const computeWidgetHeight = (node) => {
             const data = JSON.parse(node.properties.lora_data || "[]");
-            // header(24) + rows(24 each) + add-btn(30) + padding(10)
-            return 24 + (data.length * 24) + 30 + 10;
+            // header(24) + rows(24 each) + add-btn(30) + padding(22)
+            return 24 + (data.length * 24) + 30 + 22;
         };
 
         // ─────────────────────────────────────────────
@@ -393,15 +454,109 @@ app.registerExtension({
 
         /**
          * Formats a LoRA name for display: strips extension, keeps subpath.
-         * Uses CSS direction:rtl + text-overflow:ellipsis for automatic
-         * left-side truncation so the filename part stays visible.
          *
-         * @param {string} loraPath - Raw lora path (e.g. "subfolder/my_lora.safetensors")
-         * @returns {string} Display name (e.g. "subfolder/my_lora")
+         * @param {string} loraPath
+         * @returns {string}
          */
         const formatLoraName = (loraPath) => {
             if (!loraPath || loraPath === "None") return "None";
             return loraPath.replace(/\.[^.]+$/, "");
+        };
+
+        /**
+         * Rebuilds the header content (column labels, LTX toggle, cog button).
+         * Called on initial render and when LTX mode changes.
+         *
+         * @param {LGraphNode}  node
+         * @param {HTMLElement}  headerEl      - The .pltx-header div
+         * @param {object}       nodeData
+         * @param {HTMLElement}  rowsContainer - For triggering row rebuild
+         */
+        const renderHeader = (node, headerEl, nodeData, rowsContainer) => {
+            headerEl.innerHTML = "";
+
+            // Config editor button (⚙) — first in the header
+            const cogBtn = document.createElement("span");
+            cogBtn.className = "pltx-cog-btn";
+            cogBtn.textContent = "\u2699";
+            cogBtn.title = "Edit LoRA config JSON";
+            cogBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const data = JSON.parse(node.properties.lora_data || "[]");
+                const compactJson = JSON.stringify(data);
+                showPrompt("LoRA Config (JSON)", compactJson, (value) => {
+                    try {
+                        const parsed = JSON.parse(value);
+                        if (!Array.isArray(parsed)) {
+                            console.warn("[PowerLTX] Invalid config: not an array");
+                            return;
+                        }
+                        const sanitized = parsed.map(row => ({
+                            on:    row.on !== undefined ? row.on : true,
+                            lora:  row.lora || "None",
+                            str:   row.str !== undefined ? parseFloat(row.str) : 1.0,
+                            vid:   row.vid !== undefined ? parseFloat(row.vid) : 1.0,
+                            v2a:   row.v2a !== undefined ? parseFloat(row.v2a) : 1.0,
+                            aud:   row.aud !== undefined ? parseFloat(row.aud) : 1.0,
+                            a2v:   row.a2v !== undefined ? parseFloat(row.a2v) : 1.0,
+                            other: row.other !== undefined ? parseFloat(row.other) : 1.0,
+                        }));
+                        node.properties.lora_data = JSON.stringify(sanitized);
+                        syncToBackend(node);
+                        resizeNode(node);
+                        renderRows(node, rowsContainer, nodeData);
+                    } catch (err) {
+                        console.warn("[PowerLTX] Invalid JSON, ignoring:", err);
+                    }
+                }, e);
+            });
+            headerEl.appendChild(cogBtn);
+
+            // LTX mode toggle — after cog, before spacer
+            const ltxToggle = document.createElement("label");
+            ltxToggle.className = "pltx-ltx-toggle";
+            if (getLtxMode(node)) ltxToggle.classList.add("pltx-ltx-active");
+
+            const ltxCheckbox = document.createElement("input");
+            ltxCheckbox.type = "checkbox";
+            ltxCheckbox.checked = getLtxMode(node);
+            ltxCheckbox.addEventListener("change", (e) => {
+                e.stopPropagation();
+                const checked = ltxCheckbox.checked;
+                setLtxMode(node, checked);
+                // Rebuild header (to show/hide column labels) and rows
+                renderHeader(node, headerEl, nodeData, rowsContainer);
+                renderRows(node, rowsContainer, nodeData);
+                resizeNode(node);
+            });
+            // Stop pointer events from bubbling to prevent LiteGraph/Vue interference
+            ltxCheckbox.addEventListener("pointerdown", (e) => e.stopPropagation());
+
+            const ltxLabel = document.createElement("span");
+            ltxLabel.textContent = "LTX";
+
+            ltxToggle.appendChild(ltxCheckbox);
+            ltxToggle.appendChild(ltxLabel);
+            headerEl.appendChild(ltxToggle);
+
+            // Spacer pushes column labels to the right
+            const headerSpacer = document.createElement("span");
+            headerSpacer.className = "pltx-header-spacer";
+            headerEl.appendChild(headerSpacer);
+
+            // Column labels — only visible columns
+            const visibleDefs = getVisibleNumDefs(node);
+            for (const def of visibleDefs) {
+                const label = document.createElement("span");
+                label.className = "pltx-col-label";
+                label.textContent = def.label;
+                headerEl.appendChild(label);
+            }
+
+            // End spacer — matches the trash column width so labels align
+            const endSpacer = document.createElement("span");
+            endSpacer.style.flex = "0 0 24px";
+            headerEl.appendChild(endSpacer);
         };
 
         /**
@@ -464,11 +619,7 @@ app.registerExtension({
             // ── LoRA name ──
             const nameEl = document.createElement("span");
             nameEl.className = "pltx-name";
-            // Use a unicode bidi isolate to make direction:rtl truncation
-            // work correctly while keeping the text visually LTR.
             const displayName = formatLoraName(row.lora);
-            nameEl.textContent = displayName;
-            // For RTL ellipsis, we wrap text in a bdi element
             nameEl.innerHTML = "";
             const bdi = document.createElement("bdi");
             bdi.textContent = displayName;
@@ -504,8 +655,9 @@ app.registerExtension({
             });
             rowEl.appendChild(nameEl);
 
-            // ── Number cells ──
-            for (const numDef of NUM_DEFS) {
+            // ── Number cells — only visible columns ──
+            const visibleDefs = getVisibleNumDefs(node);
+            for (const numDef of visibleDefs) {
                 const numEl = document.createElement("span");
                 numEl.className = "pltx-num";
                 numEl.textContent = row[numDef.key].toFixed(2);
@@ -518,7 +670,7 @@ app.registerExtension({
             // ── Trash ──
             const trash = document.createElement("span");
             trash.className = "pltx-trash";
-            trash.textContent = "\u2715"; // ✕
+            trash.textContent = "\u2715";
             trash.addEventListener("click", (e) => {
                 e.stopPropagation();
                 const data = JSON.parse(node.properties.lora_data || "[]");
@@ -535,11 +687,10 @@ app.registerExtension({
 
         /**
          * Rebuilds all row DOM elements from the current lora_data.
-         * Called after any data mutation (add, remove, reorder, value change).
          *
-         * @param {LGraphNode}  node      - The owning node
-         * @param {HTMLElement}  rowsContainer - The .pltx-rows div
-         * @param {object}       nodeData  - Node definition data
+         * @param {LGraphNode}  node
+         * @param {HTMLElement}  rowsContainer
+         * @param {object}       nodeData
          */
         const renderRows = (node, rowsContainer, nodeData) => {
             rowsContainer.innerHTML = "";
@@ -552,7 +703,6 @@ app.registerExtension({
                 rowsContainer.appendChild(rowEl);
             }
 
-            // Sync backend after any rebuild (covers workflow reload)
             syncToBackend(node);
         };
 
@@ -563,15 +713,11 @@ app.registerExtension({
         /**
          * Attaches drag-to-slide and click-to-type behavior to a number cell.
          *
-         * - pointerdown: record start position/value
-         * - pointermove: if moved > 2px, enter drag mode (0.01 per pixel)
-         * - pointerup: if no significant movement, open canvas.prompt()
-         *
-         * @param {HTMLElement} numEl    - The .pltx-num element
-         * @param {string}      key     - Data key (e.g. "str", "vid")
-         * @param {number}      rowIdx  - Row index in data array
-         * @param {LGraphNode}  node    - The owning node
-         * @param {Function}    rebuildFn - Callback to rebuild rows
+         * @param {HTMLElement} numEl
+         * @param {string}      key
+         * @param {number}      rowIdx
+         * @param {LGraphNode}  node
+         * @param {Function}    rebuildFn
          */
         const setupNumberDrag = (numEl, key, rowIdx, node, rebuildFn) => {
             numEl.addEventListener("pointerdown", (e) => {
@@ -595,9 +741,7 @@ app.registerExtension({
                     if (moved) {
                         let newVal = startVal + (deltaX * 0.01);
                         newVal = Math.round(newVal * 100) / 100;
-                        // Update the display immediately
                         numEl.textContent = newVal.toFixed(2);
-                        // Update data
                         const curData = JSON.parse(node.properties.lora_data || "[]");
                         if (curData[rowIdx]) {
                             curData[rowIdx][key] = newVal;
@@ -613,7 +757,6 @@ app.registerExtension({
                     numEl.removeEventListener("pointerup", onUp);
 
                     if (!moved) {
-                        // Clean click — open the value prompt
                         const curData = JSON.parse(node.properties.lora_data || "[]");
                         const currentVal = curData[rowIdx]?.[key] ?? startVal;
                         showPrompt("Value", currentVal, (v) => {
@@ -642,14 +785,12 @@ app.registerExtension({
 
         /**
          * Initiates drag-to-reorder on a grip pointerdown event.
-         * Uses pointer capture on the grip element so we keep receiving
-         * events even if the pointer leaves the widget bounds.
          *
-         * @param {PointerEvent} e         - The pointerdown event
-         * @param {HTMLElement}  rowEl     - The row being dragged
-         * @param {number}       dragIdx   - Starting index
-         * @param {LGraphNode}   node      - The owning node
-         * @param {Function}     rebuildFn - Callback to rebuild rows
+         * @param {PointerEvent} e
+         * @param {HTMLElement}  rowEl
+         * @param {number}       dragIdx
+         * @param {LGraphNode}   node
+         * @param {Function}     rebuildFn
          */
         const startDragReorder = (e, rowEl, dragIdx, node, rebuildFn) => {
             const grip = e.currentTarget;
@@ -662,7 +803,6 @@ app.registerExtension({
             let currentIdx = dragIdx;
 
             const onMove = (me) => {
-                // Find which row the pointer is over based on Y position
                 const containerRect = rowsContainer.getBoundingClientRect();
                 const relativeY = me.clientY - containerRect.top;
                 const rowHeight = 24;
@@ -670,13 +810,11 @@ app.registerExtension({
                 const data = JSON.parse(node.properties.lora_data || "[]");
                 hoverIdx = Math.max(0, Math.min(hoverIdx, data.length - 1));
 
-                // Clear all drop indicators
                 for (const child of rowsContainer.children) {
                     child.classList.remove("pltx-drop-above", "pltx-drop-below");
                 }
 
                 if (hoverIdx !== currentIdx) {
-                    // Show drop indicator
                     const targetRow = rowsContainer.children[hoverIdx];
                     if (targetRow) {
                         targetRow.classList.add(
@@ -691,13 +829,11 @@ app.registerExtension({
                 grip.removeEventListener("pointermove", onMove);
                 grip.removeEventListener("pointerup", onUp);
 
-                // Clear visual indicators
                 rowEl.classList.remove("pltx-dragging");
                 for (const child of rowsContainer.children) {
                     child.classList.remove("pltx-drop-above", "pltx-drop-below");
                 }
 
-                // Determine final position
                 const containerRect = rowsContainer.getBoundingClientRect();
                 const relativeY = ue.clientY - containerRect.top;
                 const rowHeight = 24;
@@ -706,7 +842,6 @@ app.registerExtension({
                 hoverIdx = Math.max(0, Math.min(hoverIdx, data.length - 1));
 
                 if (hoverIdx !== currentIdx) {
-                    // Perform the swap
                     const item = data.splice(currentIdx, 1)[0];
                     data.splice(hoverIdx, 0, item);
                     node.properties.lora_data = JSON.stringify(data);
@@ -726,7 +861,6 @@ app.registerExtension({
 
         /**
          * Recomputes node size after rows are added or removed.
-         * Preserves the user's horizontal width.
          *
          * @param {LGraphNode} node
          */
@@ -742,9 +876,7 @@ app.registerExtension({
 
         nodeType.prototype.computeSize = function () {
             const data = JSON.parse(this.properties.lora_data || "[]");
-            // Widget height + margins + node header space
             const widgetH = computeWidgetHeight(this);
-            // Node needs: title bar (~26) + slot area (~30) + widget + bottom padding
             const height = 56 + widgetH + 10;
             return [MIN_WIDTH, height];
         };
@@ -765,88 +897,40 @@ app.registerExtension({
                 this.properties.lora_data = JSON.stringify([makeEmptyRow()]);
             }
 
-            // Hide the lora_data widget so neither renderer draws it.
-            // - "converted-widget" type prevents LiteGraph canvas from drawing it.
-            // - options.canvasOnly = true makes shouldRenderAsVue() return false,
-            //   so the Vue/Nodes 2.0 renderer skips it entirely (no WidgetLegacy
-            //   mini-canvas is created).
-            const w = this.widgets?.find(w => w.name === "lora_data");
-            if (w) {
-                w.type = "converted-widget";
-                w.options = w.options || {};
-                w.options.canvasOnly = true;
-                w.computeSize = () => [0, -4];
-                w.draw = () => {};
-            }
+            // ── Hide backend-only widgets from both renderers ──
+            // "converted-widget" prevents LiteGraph canvas drawing.
+            // canvasOnly = true prevents Vue/Nodes 2.0 rendering.
+            const hideWidget = (name) => {
+                const w = this.widgets?.find(w => w.name === name);
+                if (w) {
+                    w.type = "converted-widget";
+                    w.options = w.options || {};
+                    w.options.canvasOnly = true;
+                    w.computeSize = () => [0, -4];
+                    w.draw = () => {};
+                }
+            };
+            hideWidget("lora_data");
+            hideWidget("ltx_mode");
 
-            // Remove the lora_data input slot — it's managed internally via
-            // properties and the hidden widget.  The visible slot would be
-            // confusing.
-            const slotIdx = this.inputs?.findIndex(inp => inp.name === "lora_data");
-            if (slotIdx !== undefined && slotIdx >= 0) {
-                this.removeInput(slotIdx);
+            // Remove the lora_data and ltx_mode input slots — they're managed
+            // internally via properties and the hidden widgets.
+            for (const slotName of ["lora_data", "ltx_mode"]) {
+                const slotIdx = this.inputs?.findIndex(inp => inp.name === slotName);
+                if (slotIdx !== undefined && slotIdx >= 0) {
+                    this.removeInput(slotIdx);
+                }
             }
 
             // ── Build the DOM widget ──
 
             const container = document.createElement("div");
             container.className = "pltx-container";
+            const nodeRef = this;
 
-            // ── Header row: config button + column labels ──
+            // ── Header ──
             const header = document.createElement("div");
             header.className = "pltx-header";
-
-            // Spacer to push labels right (mimics the grip+toggle+name space)
-            const headerSpacer = document.createElement("span");
-            headerSpacer.className = "pltx-header-spacer";
-            header.appendChild(headerSpacer);
-
-            // Column labels
-            for (const def of NUM_DEFS) {
-                const label = document.createElement("span");
-                label.className = "pltx-col-label";
-                label.textContent = def.label;
-                header.appendChild(label);
-            }
-
-            // Config editor button (⚙)
-            const cogBtn = document.createElement("span");
-            cogBtn.className = "pltx-cog-btn";
-            cogBtn.textContent = "\u2699"; // ⚙
-            cogBtn.title = "Edit LoRA config JSON";
-            const nodeRef = this;
-            cogBtn.addEventListener("click", (e) => {
-                e.stopPropagation();
-                const data = JSON.parse(nodeRef.properties.lora_data || "[]");
-                const compactJson = JSON.stringify(data);
-                showPrompt("LoRA Config (JSON)", compactJson, (value) => {
-                    try {
-                        const parsed = JSON.parse(value);
-                        if (!Array.isArray(parsed)) {
-                            console.warn("[PowerLTX] Invalid config: not an array");
-                            return;
-                        }
-                        const sanitized = parsed.map(row => ({
-                            on:    row.on !== undefined ? row.on : true,
-                            lora:  row.lora || "None",
-                            str:   row.str !== undefined ? parseFloat(row.str) : 1.0,
-                            vid:   row.vid !== undefined ? parseFloat(row.vid) : 1.0,
-                            v2a:   row.v2a !== undefined ? parseFloat(row.v2a) : 1.0,
-                            aud:   row.aud !== undefined ? parseFloat(row.aud) : 1.0,
-                            a2v:   row.a2v !== undefined ? parseFloat(row.a2v) : 1.0,
-                            other: row.other !== undefined ? parseFloat(row.other) : 1.0,
-                        }));
-                        nodeRef.properties.lora_data = JSON.stringify(sanitized);
-                        syncToBackend(nodeRef);
-                        resizeNode(nodeRef);
-                        renderRows(nodeRef, rowsContainer, nodeData);
-                    } catch (err) {
-                        console.warn("[PowerLTX] Invalid JSON, ignoring:", err);
-                    }
-                }, e);
-            });
-            header.appendChild(cogBtn);
-
             container.appendChild(header);
 
             // ── Row container ──
@@ -870,14 +954,16 @@ app.registerExtension({
             container.appendChild(addBtn);
 
             // ── Initial render ──
+            renderHeader(this, header, nodeData, rowsContainer);
             renderRows(this, rowsContainer, nodeData);
 
-            // ── Register as DOM widget ──
-            // Store reference so we can access container and rows later
+            // ── Store references for configure hook ──
             this._pltxContainer = container;
             this._pltxRowsContainer = rowsContainer;
+            this._pltxHeader = header;
             this._pltxNodeData = nodeData;
 
+            // ── Register as DOM widget ──
             this.addDOMWidget("lora_ui", "custom", container, {
                 hideOnZoom: true,
                 getMinHeight: () => computeWidgetHeight(nodeRef),
@@ -907,9 +993,10 @@ app.registerExtension({
         nodeType.prototype.configure = function (data) {
             origConfigure?.apply(this, arguments);
 
-            // After loading from a saved workflow, re-render rows from
-            // the restored properties.lora_data.
-            if (this._pltxRowsContainer && this._pltxNodeData) {
+            // After loading from a saved workflow, re-render header and rows
+            // from the restored state (properties.lora_data + ltx_mode widget).
+            if (this._pltxRowsContainer && this._pltxNodeData && this._pltxHeader) {
+                renderHeader(this, this._pltxHeader, this._pltxNodeData, this._pltxRowsContainer);
                 renderRows(this, this._pltxRowsContainer, this._pltxNodeData);
                 requestAnimationFrame(() => resizeNode(this));
             }
