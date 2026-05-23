@@ -793,66 +793,73 @@ app.registerExtension({
          * @param {Function}     rebuildFn
          */
         const startDragReorder = (e, rowEl, dragIdx, node, rebuildFn) => {
-            const grip = e.currentTarget;
-            grip.setPointerCapture(e.pointerId);
-
             const rowsContainer = rowEl.parentElement;
             if (!rowsContainer) return;
 
             rowEl.classList.add("pltx-dragging");
             let currentIdx = dragIdx;
+            const pointerId = e.pointerId;
 
-            const onMove = (me) => {
-                const containerRect = rowsContainer.getBoundingClientRect();
-                const relativeY = me.clientY - containerRect.top;
-                const rowHeight = 24;
-                let hoverIdx = Math.floor(relativeY / rowHeight);
-                const data = JSON.parse(node.properties.lora_data || "[]");
-                hoverIdx = Math.max(0, Math.min(hoverIdx, data.length - 1));
-
-                for (const child of rowsContainer.children) {
-                    child.classList.remove("pltx-drop-above", "pltx-drop-below");
-                }
-
-                if (hoverIdx !== currentIdx) {
-                    const targetRow = rowsContainer.children[hoverIdx];
-                    if (targetRow) {
-                        targetRow.classList.add(
-                            hoverIdx < currentIdx ? "pltx-drop-above" : "pltx-drop-below"
-                        );
-                    }
-                }
+            /**
+             * Computes the row index under the pointer, accounting for
+             * canvas zoom.  In LG legacy mode the DOM widget is scaled
+             * via CSS transform, so getBoundingClientRect() returns
+             * screen-scaled dimensions.  We use the first row's actual
+             * rendered height to derive the correct index regardless
+             * of zoom level.
+             */
+            const getHoverIdx = (clientY, dataLen) => {
+                const firstRow = rowsContainer.children[0];
+                if (!firstRow) return 0;
+                const scaledRowH = firstRow.getBoundingClientRect().height;
+                const containerTop = rowsContainer.getBoundingClientRect().top;
+                const relativeY = clientY - containerTop;
+                let idx = Math.floor(relativeY / scaledRowH);
+                return Math.max(0, Math.min(idx, dataLen - 1));
             };
 
-            const onUp = (ue) => {
-                grip.releasePointerCapture(ue.pointerId);
-                grip.removeEventListener("pointermove", onMove);
-                grip.removeEventListener("pointerup", onUp);
+            const onMove = (me) => {
+                if (me.pointerId !== pointerId) return;
 
-                rowEl.classList.remove("pltx-dragging");
-                for (const child of rowsContainer.children) {
-                    child.classList.remove("pltx-drop-above", "pltx-drop-below");
-                }
-
-                const containerRect = rowsContainer.getBoundingClientRect();
-                const relativeY = ue.clientY - containerRect.top;
-                const rowHeight = 24;
-                let hoverIdx = Math.floor(relativeY / rowHeight);
                 const data = JSON.parse(node.properties.lora_data || "[]");
-                hoverIdx = Math.max(0, Math.min(hoverIdx, data.length - 1));
+                const hoverIdx = getHoverIdx(me.clientY, data.length);
 
                 if (hoverIdx !== currentIdx) {
+                    // Swap data
                     const item = data.splice(currentIdx, 1)[0];
                     data.splice(hoverIdx, 0, item);
                     node.properties.lora_data = JSON.stringify(data);
                     syncToBackend(node);
-                }
 
+                    // Swap DOM elements
+                    const draggedEl = rowsContainer.children[currentIdx];
+                    const targetEl = rowsContainer.children[hoverIdx];
+                    if (draggedEl && targetEl) {
+                        if (hoverIdx < currentIdx) {
+                            rowsContainer.insertBefore(draggedEl, targetEl);
+                        } else {
+                            rowsContainer.insertBefore(draggedEl, targetEl.nextSibling);
+                        }
+                    }
+
+                    currentIdx = hoverIdx;
+                }
+            };
+
+            const onUp = (ue) => {
+                if (ue.pointerId !== pointerId) return;
+
+                document.removeEventListener("pointermove", onMove, true);
+                document.removeEventListener("pointerup", onUp, true);
+
+                rowEl.classList.remove("pltx-dragging");
                 rebuildFn();
             };
 
-            grip.addEventListener("pointermove", onMove);
-            grip.addEventListener("pointerup", onUp);
+            // Listen on document in capture phase — survives DOM element
+            // repositioning (pointer capture is lost when elements move).
+            document.addEventListener("pointermove", onMove, true);
+            document.addEventListener("pointerup", onUp, true);
         };
 
         // ─────────────────────────────────────────────
