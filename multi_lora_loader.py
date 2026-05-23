@@ -6,7 +6,7 @@ import comfy.sd
 import comfy.utils
 
 
-class PowerLTXLoraLoaderExtra:
+class MultiLoRALoader:
     @classmethod
     def INPUT_TYPES(s):
         lora_list = ["None"] + folder_paths.get_filename_list("loras")
@@ -33,6 +33,8 @@ class PowerLTXLoraLoaderExtra:
     RETURN_NAMES = ("model", "clip", "lora_data")
     FUNCTION = "load_loras"
     CATEGORY = "loaders"
+    DESCRIPTION = "Multi-LoRA loader with optional LTX layer-specific strength control. Supports per-LoRA toggling, reordering, and bulk management."
+    SEARCH_ALIASES = ["power lora loader", "lora stack", "multi lora", "lora loader"]
 
     # ─────────────────────────────────────────────
     #  Helper: Build rich LoRA info list
@@ -165,7 +167,7 @@ class PowerLTXLoraLoaderExtra:
             lora_name = row.get("lora")
             path = folder_paths.get_full_path("loras", lora_name)
             if not path:
-                print(f"[PowerLTXLoraLoaderExtra] Warning: LoRA not found: {lora_name}")
+                print(f"[MultiLoRALoader] Warning: LoRA not found: {lora_name}")
                 continue
 
             strength_model = float(row.get("str", 1.0))
@@ -236,3 +238,37 @@ class PowerLTXLoraLoaderExtra:
                 )
 
         return (new_model, new_clip, lora_info_json)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Deprecated stub — keeps old workflows loadable
+# ═══════════════════════════════════════════════════════════════
+
+class PowerLTXLoraLoaderExtra:
+    """Deprecated — renamed to MultiLoRALoader."""
+
+    DESCRIPTION = (
+        "[DEPRECATED] This node has been renamed to 'Multi LoRA Loader'. "
+        "To migrate: copy the JSON data below, add a new Multi LoRA Loader "
+        "node, click its cog button (\u2699), and paste the data in."
+    )
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "lora_data": ("STRING", {
+                    "default": "[]",
+                    "multiline": True,
+                }),
+            },
+        }
+
+    RETURN_TYPES = ()
+    OUTPUT_NODE = True
+    FUNCTION = "noop"
+    CATEGORY = "loaders"
+    DEPRECATED = True
+
+    def noop(self, lora_data="[]"):
+        return {}

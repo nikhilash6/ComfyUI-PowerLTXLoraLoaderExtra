@@ -1,23 +1,29 @@
-# Power LTX LoRA Loader Extra
+# Multi LoRA Loader
 
-A powerful LoRA management node for ComfyUI that enables precise, layer-specific control over multiple LoRAs in LTX2 video generation workflows.
+A powerful multi-LoRA management node for ComfyUI with optional LTX2 layer-specific strength control, drag-and-drop reordering, and rgthree LoRA info integration.
+
+> **Renamed from Power LTX LoRA Loader Extra.** If you have existing workflows using the old node, see [Migration](#migration) below.
 
 ![Workflow Diagram](./example_workflows/power_ltx_lora_loader.png)
 
 ## Features
 
 - **Multi-LoRA Support**: Load and apply multiple LoRAs simultaneously with individual strength controls
-- **Layer-Specific Strength Control**: Fine-tune LoRA influence across different network layers:
+- **Two Modes**:
+  - **Standard mode**: Single strength value per LoRA, applied uniformly via ComfyUI's built-in loader
+  - **LTX mode**: Per-layer strength control for LTX2 video/audio models (enable via the LTX checkbox)
+- **LTX Layer Controls** (when LTX mode is enabled):
   - **STR** (Strength Model): Overall model strength
   - **Vid** (Video): Video attention layers
-  - **V2A** (Video-to-Audio): Cross-modal attention (video → audio)
+  - **V2A** (Video-to-Audio): Cross-modal attention (video to audio)
   - **Aud** (Audio): Audio-specific layers
-  - **A2V** (Audio-to-Video): Cross-modal attention (audio → video)
+  - **A2V** (Audio-to-Video): Cross-modal attention (audio to video)
   - **Other**: Remaining network components
-- **Intuitive UI**: Drag-and-drop row reordering, toggle enable/disable, quick click-to-edit values
-- **Optional Model Input**: Use as a standalone LoRA manager even without a model input
+- **Intuitive UI**: Drag-and-drop row reordering, toggle enable/disable, click-to-edit or drag-to-slide values
+- **rgthree LoRA Info Integration**: Right-click any LoRA name to open the rgthree LoRA info dialog (requires [rgthree-comfy](https://github.com/rgthree/rgthree-comfy)). LoRAs with fetched info display a circled info badge next to their name (green for Civitai data, gray for local info)
+- **Optional Model/CLIP Input**: Use as a standalone LoRA manager even without model or CLIP connected
 - **JSON Output**: Export a rich JSON structure of all selected LoRAs for external processing
-- **Raw Config Editor**: Click the ⚙ button to copy/paste the entire LoRA configuration as JSON for easy sharing and batch editing
+- **Raw Config Editor**: Click the cog button to copy/paste the entire LoRA configuration as JSON
 - **Sidecar Metadata Support**: Automatically loads metadata from `.json` sidecar files alongside LoRA weights
 
 ## Installation
@@ -25,45 +31,61 @@ A powerful LoRA management node for ComfyUI that enables precise, layer-specific
 1. Clone or download this repository into your ComfyUI `custom_nodes` directory:
    ```bash
    cd ComfyUI/custom_nodes
-   git clone https://github.com/yourusername/ComfyUI-PowerLTXLoraLoaderExtra.git
-   cd ComfyUI-PowerLTXLoraLoaderExtra
+   git clone https://github.com/phazei/ComfyUI-MultiLoraLoader.git
    ```
 
 2. Restart ComfyUI or reload the browser page.
 
-3. The node will appear in the node menu under **Loaders > Power LTX LoRA Loader Extra**.
+3. The node will appear in the node menu under **Loaders > Multi LoRA Loader**. You can also search for "power lora loader", "lora stack", or "multi lora".
 
 ## Usage
 
 ### Basic Workflow
 
-1. Create a **Power LTX LoRA Loader Extra** node
-2. Connect a model input (optional — the node works standalone)
+1. Add a **Multi LoRA Loader** node
+2. Connect model and/or CLIP inputs (both optional)
 3. Click **+ Add LoRA** to add rows
-4. Click the LoRA name field to open a searchable menu of available LoRAs
+4. Click the LoRA name field to open a menu of available LoRAs
 5. Adjust strength values by:
    - **Dragging** left/right for fine control
-   - **Single clicking** to open a text input for exact values
-6. Toggle the **●** circle on/off to enable/disable individual LoRAs
-7. Drag rows by the **≡** grip to reorder
-8. Click **✕** to delete a row
+   - **Single clicking** to type an exact value
+6. Toggle the dot on/off to enable/disable individual LoRAs
+7. Drag rows by the grip handle to reorder
+8. Click the X to delete a row
+9. Enable the **LTX** checkbox to show per-layer strength columns
 
 ### UI Elements
 
 | Element | Action | Purpose |
 |---------|--------|---------|
-| **⚙** (Config) | Click | Open raw JSON editor for copy/paste/sharing |
-| **≡** (Grip) | Drag vertically | Reorder LoRA rows |
-| **●** (Toggle) | Click | Enable/disable the LoRA |
-| **LoRA Name** | Click | Open searchable LoRA selection menu |
-| **STR, Vid, V2A, Aud, A2V, Other** | Drag or click | Adjust layer-specific strengths (0.00–∞) |
-| **✕** (Trash) | Click | Delete the row |
+| **LTX** (Checkbox) | Click | Toggle LTX per-layer mode on/off |
+| **Cog** | Click | Open raw JSON editor for copy/paste/sharing |
+| **Grip** | Drag vertically | Reorder LoRA rows |
+| **Dot** (Toggle) | Click | Enable/disable the LoRA |
+| **LoRA Name** | Left-click | Open LoRA selection menu |
+| **LoRA Name** | Right-click | Show LoRA Info (requires rgthree-comfy) |
+| **Info badge** | — | Indicates fetched LoRA info (green = Civitai, gray = local) |
+| **STR / Vid / V2A / Aud / A2V / Other** | Drag or click | Adjust strengths |
+| **X** (Trash) | Click | Delete the row |
 | **+ Add LoRA** | Click | Add a new empty row |
 
 ### Outputs
 
-- **Model**: The input model with all active LoRAs applied
+- **model**: The input model with all active LoRAs applied
+- **clip**: The input CLIP with LoRAs applied (standard mode only; LTX mode passes CLIP through unchanged)
 - **lora_data**: JSON string containing metadata for all selected LoRAs (enabled and disabled)
+
+### rgthree Integration
+
+This node integrates with [rgthree-comfy](https://github.com/rgthree/rgthree-comfy) for LoRA metadata viewing:
+
+- **Right-click** any LoRA name and select **Show LoRA Info** to open rgthree's info dialog with Civitai data, trained words, sample images, and editable notes
+- LoRAs that have fetched info display a small circled info badge next to their name:
+  - **Green** badge: Civitai data has been fetched
+  - **Gray** badge: Local info file exists
+  - **No badge**: No info available yet (use the dialog to fetch it)
+
+If rgthree-comfy is not installed, the info features are simply not shown.
 
 ### Example Output
 
@@ -88,15 +110,15 @@ The `lora_data` output includes all LoRAs with selected weights:
 
 ## Sharing and Batch Editing
 
-### Using the Config Editor (⚙)
+### Using the Config Editor (cog button)
 
 The easiest way to share or batch-edit your LoRA configuration:
 
-1. Click the **⚙** button in the top-right of the node
+1. Click the cog button in the header of the node
 2. Copy the compact JSON from the dialog
-3. Edit it in your text editor (VSCode, notepad, etc.)
+3. Edit it in your text editor
 4. Paste the edited JSON back and press Enter
-5. Invalid JSON is ignored — the config stays unchanged
+5. Invalid JSON is ignored and the config stays unchanged
 
 **Example config:**
 ```json
@@ -108,19 +130,20 @@ The easiest way to share or batch-edit your LoRA configuration:
 You can also hand-edit workflows in the saved JSON file:
 
 1. Open the workflow JSON file
-2. Locate your node's `properties.lora_data` field (it's a proper JSON array, not escaped)
+2. Locate your node's `properties.lora_data` field
 3. Edit the LoRA list directly
-4. Save and reload in ComfyUI — changes will be reflected in the node UI
+4. Save and reload in ComfyUI
 
-## Key Differences from Power Lora Loader
+## Migration
 
-This node extends the original **Power Lora Loader** concept with:
+This node was previously called **Power LTX LoRA Loader Extra**. If you load an old workflow:
 
-- **Layer-specific strength control**: Separate sliders for video, audio, and cross-modal attention (essential for LTX2)
-- **Disabled LoRA tracking**: LoRAs can be toggled off without removing them from the config
-- **JSON output port**: Easy integration with downstream nodes or external tools
-- **Responsive UI**: The LoRA name column expands when the node is widened
-- **Improved interaction**: Better drag-to-reorder, click-to-edit, and visual feedback
+1. The old node will appear with a "Node Renamed" notice and your LoRA data visible in a text box
+2. Copy the JSON data from the text box
+3. Add a new **Multi LoRA Loader** node
+4. Click the cog button on the new node and paste the data in
+5. Enable the **LTX** checkbox if your workflow used LTX layer-specific strengths
+6. Delete the old deprecated node
 
 ## Troubleshooting
 
@@ -129,21 +152,25 @@ This node extends the original **Power Lora Loader** concept with:
 - Refresh the page or restart ComfyUI
 
 ### Disabled LoRAs don't affect the model
-- Disabled LoRAs (toggle off) are kept in your configuration but not applied to the model
-- Your full configuration (including disabled LoRAs with their values) is preserved in the workflow
+- Disabled LoRAs (toggle off) are kept in your configuration but not applied
+- Your full configuration including disabled LoRAs is preserved in the workflow
 
 ### Can't shrink the node after expanding it
-- Drag the node's resize handle (bottom-right corner) to make it narrower
-- The node enforces a minimum width of 500px to keep the UI usable
+- Drag the node's resize handle to make it narrower
+- The node enforces a minimum width of 500px
+
+### LoRA Info / right-click menu not working
+- Requires [rgthree-comfy](https://github.com/rgthree/rgthree-comfy) to be installed
+- If rgthree is not available, the info features are silently disabled
 
 ## License
 
-Apache 2.0.  In LICENSE.md
+Apache 2.0. See LICENSE file.
 
 ## Credits
 
-Based on the **Power Lora Loader** concept, extended with layer-specific strength control and LTX2 support.
+Built on the **Power Lora Loader** concept by [rgthree](https://github.com/rgthree/rgthree-comfy), extended with multi-LoRA management, LTX2 layer-specific strength control, and rgthree info dialog integration.
 
 ## Contributing
 
-Contributions, bug reports, and feature requests are welcome! Please open an issue or submit a pull request.
+Contributions, bug reports, and feature requests are welcome! Please open an issue or submit a pull request at [github.com/phazei/ComfyUI-MultiLoraLoader](https://github.com/phazei/ComfyUI-MultiLoraLoader).

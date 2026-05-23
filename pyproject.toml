@@ -1,14 +1,25 @@
 [project]
-name = "ComfyUI-PowerLTXLoraLoaderExtra"
-description = "Multi-LoRA LTX loader with layer-specific strength control. Supports per-LoRA adjustment of model, video, audio, and cross-attention strengths. Outputs modified model plus JSON metadata of applied LoRAs."
-version = "1.0.1"
+name = "ComfyUI-MultiLoRALoader"
+description = "Multi-LoRA loader with optional extra LTX layer-specific audio strength control. Supports per-LoRA adjustment of model, video, audio, and cross-attention strengths. Outputs modified model plus JSON metadata of applied LoRAs."
+version = "2.0.0"
+keywords = [
+    "ComfyUI",
+    "lora",
+    "lora loader",
+    "lora stack",
+    "multi lora",
+    "power lora loader",
+    "LTX",
+    "audio lora",
+    "video lora",
+]
 license = {file = "LICENSE"}
 
 [project.urls]
-Repository = "https://github.com/phazei/ComfyUI-PowerLTXLoraLoaderExtra"
+Repository = "https://github.com/phazei/ComfyUI-MultiLoraLoader"
 #  Used by Comfy Registry https://comfyregistry.org
 
 [tool.comfy]
 PublisherId = "phazei"
-DisplayName = "PowerLTXLoraLoaderExtra"
+DisplayName = "Multi LoRA Loader"
 Icon = ""
