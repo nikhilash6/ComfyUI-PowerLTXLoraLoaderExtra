@@ -369,6 +369,8 @@ app.registerExtension({
 
         let _RgthreeLoraInfoDialog = null;
         let _LoraInfoService = null;
+        const _loraInfoCache = new Map();
+
         const getLoraInfoService = async () => {
             if (!_LoraInfoService) {
                 try {
@@ -380,6 +382,33 @@ app.registerExtension({
             }
             return _LoraInfoService;
         };
+
+        /**
+         * Appends an info badge to a BDI element if the info warrants one.
+         * @param {HTMLElement} bdi
+         * @param {object|null} info
+         */
+        const appendInfoBadge = (bdi, info) => {
+            if (!info?.raw?.civitai && !info?.hasInfoFile) return;
+            const badge = document.createElement("span");
+            badge.className = "mll-info-badge";
+            badge.textContent = " \u24D8";  // circled i
+            badge.title = info?.raw?.civitai
+                ? "Civitai info available"
+                : "Local info available";
+            if (info?.raw?.civitai) {
+                badge.classList.add("mll-info-civitai");
+            }
+            bdi.appendChild(badge);
+        };
+
+        /**
+         * Opens the rgthree LoRA info dialog. Returns the dialog
+         * instance (or null if rgthree is unavailable) so callers
+         * can listen for the "close" event.
+         * @param {string} loraName
+         * @returns {Promise<EventTarget|null>}
+         */
         const showLoraInfo = async (loraName) => {
             if (!_RgthreeLoraInfoDialog) {
                 try {
@@ -388,9 +417,9 @@ app.registerExtension({
                 } catch (err) {
                     console.warn("[MultiLoRA] rgthree-comfy LoRA info dialog not available:", err);
                 }
-                if (!_RgthreeLoraInfoDialog) return;
+                if (!_RgthreeLoraInfoDialog) return null;
             }
-            new _RgthreeLoraInfoDialog(loraName).show();
+            return new _RgthreeLoraInfoDialog(loraName).show();
         };
 
         // ─────────────────────────────────────────────
@@ -643,24 +672,19 @@ app.registerExtension({
             bdi.textContent = displayName;
             nameEl.appendChild(bdi);
 
-            // ── Info badge (async) ──
+            // ── Info badge (cache-first to avoid blink on rebuild) ──
             if (row.lora && row.lora !== "None") {
-                getLoraInfoService().then(svc => {
-                    if (!svc) return;
-                    svc.getInfo(row.lora, false, true).then(info => {
-                        if (!info?.raw?.civitai && !info?.hasInfoFile) return;
-                        const badge = document.createElement("span");
-                        badge.className = "mll-info-badge";
-                        badge.textContent = " \u24D8";  // circled i
-                        badge.title = info?.raw?.civitai
-                            ? "Civitai info available"
-                            : "Local info available";
-                        if (info?.raw?.civitai) {
-                            badge.classList.add("mll-info-civitai");
-                        }
-                        bdi.appendChild(badge);
+                if (_loraInfoCache.has(row.lora)) {
+                    appendInfoBadge(bdi, _loraInfoCache.get(row.lora));
+                } else {
+                    getLoraInfoService().then(svc => {
+                        if (!svc) return;
+                        svc.getInfo(row.lora, false, true).then(info => {
+                            _loraInfoCache.set(row.lora, info);
+                            appendInfoBadge(bdi, info);
+                        });
                     });
-                });
+                }
             }
 
             nameEl.addEventListener("click", (e) => {
@@ -686,7 +710,19 @@ app.registerExtension({
                 e.stopPropagation();
                 if (row.lora && row.lora !== "None") {
                     new LiteGraph.ContextMenu(
-                        [{ content: "Show LoRA Info", callback: () => showLoraInfo(row.lora) }],
+                        [{ content: "Show LoRA Info", callback: async () => {
+                            const dialog = await showLoraInfo(row.lora);
+                            if (dialog) {
+                                dialog.addEventListener("close", async () => {
+                                    const svc = await getLoraInfoService();
+                                    if (svc) {
+                                        const info = await svc.getInfo(row.lora, true, true);
+                                        _loraInfoCache.set(row.lora, info);
+                                        rebuildFn();
+                                    }
+                                });
+                            }
+                        }}],
                         { event: e, title: formatLoraName(row.lora) }
                     );
                 }
