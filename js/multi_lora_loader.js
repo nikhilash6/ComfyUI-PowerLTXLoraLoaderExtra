@@ -163,6 +163,11 @@ function injectStyles() {
     opacity: 0.4;
 }
 
+.mll-row.mll-missing-lora .mll-name bdi {
+    text-decoration: line-through;
+    color: #f44336;
+}
+
 /* ── Grip ── */
 
 .mll-grip {
@@ -621,10 +626,14 @@ app.registerExtension({
             rowEl.className = "mll-row";
 
             // Apply state classes
+            const loraList = nodeData.input.hidden.available_loras[0];
             if (row.lora === "None") {
                 rowEl.classList.add("mll-none-lora");
             } else if (!row.on) {
                 rowEl.classList.add("mll-disabled");
+            }
+            if (row.lora !== "None" && !loraList.includes(row.lora)) {
+                rowEl.classList.add("mll-missing-lora");
             }
 
             // ── Grip handle ──
@@ -671,6 +680,9 @@ app.registerExtension({
             const bdi = document.createElement("bdi");
             bdi.textContent = displayName;
             nameEl.appendChild(bdi);
+            if (row.lora !== "None" && !loraList.includes(row.lora)) {
+                nameEl.title = "LoRA file not found";
+            }
 
             // ── Info badge (cache-first to avoid blink on rebuild) ──
             if (row.lora && row.lora !== "None") {

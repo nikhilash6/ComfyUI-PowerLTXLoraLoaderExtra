@@ -20,7 +20,8 @@ A powerful multi-LoRA management node for ComfyUI with optional LTX2 layer-speci
   - **A2V** (Audio-to-Video): Cross-modal attention (audio to video)
   - **Other**: Remaining network components
 - **Intuitive UI**: Drag-and-drop row reordering, toggle enable/disable, click-to-edit or drag-to-slide values
-- **rgthree LoRA Info Integration**: Right-click any LoRA name to open the rgthree LoRA info dialog (requires [rgthree-comfy](https://github.com/rgthree/rgthree-comfy)). LoRAs with fetched info display a circled info badge next to their name (green for Civitai data, gray for local info)
+- **Missing LoRA Detection**: LoRAs that no longer exist on disk are shown with red strikethrough text on session load, so you can spot moved or deleted files at a glance
+- **rgthree LoRA Info Integration**: Right-click any LoRA name to open the rgthree LoRA info dialog (requires [rgthree-comfy](https://github.com/rgthree/rgthree-comfy)). LoRAs with fetched info display a circled info badge next to their name (green for Civitai data, gray for local info). Fetching new info from Civitai in the dialog updates the badge immediately on close
 - **Optional Model/CLIP Input**: Use as a standalone LoRA manager even without model or CLIP connected
 - **JSON Output**: Export a rich JSON structure of all selected LoRAs for external processing
 - **Raw Config Editor**: Click the cog button to copy/paste the entire LoRA configuration as JSON
@@ -65,6 +66,7 @@ A powerful multi-LoRA management node for ComfyUI with optional LTX2 layer-speci
 | **LoRA Name** | Left-click | Open LoRA selection menu |
 | **LoRA Name** | Right-click | Show LoRA Info (requires rgthree-comfy) |
 | **Info badge** | — | Indicates fetched LoRA info (green = Civitai, gray = local) |
+| **~~Strikethrough~~** | — | LoRA file not found on disk (hover for tooltip) |
 | **STR / Vid / V2A / Aud / A2V / Other** | Drag or click | Adjust strengths |
 | **X** (Trash) | Click | Delete the row |
 | **+ Add LoRA** | Click | Add a new empty row |
@@ -84,6 +86,8 @@ This node integrates with [rgthree-comfy](https://github.com/rgthree/rgthree-com
   - **Green** badge: Civitai data has been fetched
   - **Gray** badge: Local info file exists
   - **No badge**: No info available yet (use the dialog to fetch it)
+
+Info is cached after first fetch, so toggling, reordering, or adding LoRAs won't cause badge flicker. Closing the info dialog after fetching new data from Civitai automatically refreshes the badge.
 
 If rgthree-comfy is not installed, the info features are simply not shown.
 
@@ -146,6 +150,12 @@ This node was previously called **Power LTX LoRA Loader Extra**. If you load an 
 6. Delete the old deprecated node
 
 ## Troubleshooting
+
+### LoRA name shows red strikethrough
+- The LoRA file was not found in your `models/loras` directory
+- It may have been moved, renamed, or deleted
+- Hover over the name for a "LoRA file not found" tooltip
+- The LoRA will be skipped during execution but its configuration is preserved
 
 ### LoRA doesn't appear in the menu
 - Ensure the LoRA file is in your ComfyUI `models/loras` directory

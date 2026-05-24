@@ -1,7 +1,7 @@
 [project]
 name = "ComfyUI-MultiLoRALoader"
 description = "Multi-LoRA loader with optional extra LTX layer-specific audio strength control. Supports per-LoRA adjustment of model, video, audio, and cross-attention strengths. Outputs modified model plus JSON metadata of applied LoRAs."
-version = "2.0.0"
+version = "2.1.0"
 keywords = [
     "ComfyUI",
     "lora",
