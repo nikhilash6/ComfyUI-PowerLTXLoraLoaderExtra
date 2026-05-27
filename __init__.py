@@ -1,13 +1,15 @@
-from .multi_lora_loader import MultiLoRALoader, PowerLTXLoraLoaderExtra
+from .multi_lora_loader import MultiLoRALoader, PowerLTXLoraLoaderExtra, MultiLoRA_ParseJSON
 
 NODE_CLASS_MAPPINGS = {
     "MultiLoRALoader": MultiLoRALoader,
     "PowerLTXLoraLoaderExtra": PowerLTXLoraLoaderExtra,
+    "MultiLoRA_ParseJSON": MultiLoRA_ParseJSON,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MultiLoRALoader": "Multi LoRA Loader",
     "PowerLTXLoraLoaderExtra": "Power LTX LoRA Loader Extra (Deprecated)",
+    "MultiLoRA_ParseJSON": "Parse JSON (MultiLoRA)",
 }
 
 WEB_DIRECTORY = "./js"

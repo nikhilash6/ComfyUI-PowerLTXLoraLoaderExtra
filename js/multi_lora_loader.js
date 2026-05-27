@@ -1019,6 +1019,17 @@ app.registerExtension({
 
             const container = document.createElement("div");
             container.className = "mll-container";
+
+            // Forward wheel events to the canvas so zooming works
+            // even when the mouse is over this DOM widget.
+            container.addEventListener("wheel", (e) => {
+                e.preventDefault();
+                const canvas = app.canvas?.canvas || document.querySelector("canvas");
+                if (canvas) {
+                    canvas.dispatchEvent(new WheelEvent("wheel", e));
+                }
+            }, { passive: false });
+
             const nodeRef = this;
 
             // ── Header ──

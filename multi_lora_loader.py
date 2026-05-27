@@ -272,3 +272,35 @@ class PowerLTXLoraLoaderExtra:
 
     def noop(self, lora_data="[]"):
         return {}
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Utility: Parse a JSON string into a Python object
+# ═══════════════════════════════════════════════════════════════
+
+class MultiLoRA_ParseJSON:
+    """Parses a JSON string into a native Python object (list, dict, etc.).
+
+    Useful for feeding structured data to nodes that accept any-type
+    inputs (e.g. Power Puter) but cannot decode JSON strings themselves.
+    """
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "json_string": ("STRING", {"forceInput": True}),
+            },
+        }
+
+    RETURN_TYPES = ("*",)
+    RETURN_NAMES = ("data",)
+    FUNCTION = "parse"
+    CATEGORY = "loaders"
+    DESCRIPTION = "Parses a JSON string into a Python object (list, dict, number, etc.) so it can be consumed by nodes that accept any-type inputs."
+
+    def parse(self, json_string):
+        try:
+            return (json.loads(json_string),)
+        except Exception as e:
+            raise ValueError(f"[Parse JSON] Invalid JSON: {e}")
