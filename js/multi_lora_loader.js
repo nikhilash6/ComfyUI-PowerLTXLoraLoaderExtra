@@ -284,6 +284,14 @@ function injectStyles() {
     color: #fff;
 }
 
+/* ── Drag-and-Drop Overlay ── */
+
+.mll-container.mll-drag-over {
+    outline: 2px solid rgba(100, 150, 255, 0.7);
+    outline-offset: -2px;
+    background: rgba(100, 150, 255, 0.08);
+}
+
 /* ── Info Badge ── */
 
 .mll-info-badge {
@@ -513,6 +521,95 @@ app.registerExtension({
         const formatLoraName = (loraPath) => {
             if (!loraPath || loraPath === "None") return "None";
             return loraPath.replace(/\.[^.]+$/, "");
+        };
+
+        // ─────────────────────────────────────────────
+        //  Drag-and-Drop Helpers
+        // ─────────────────────────────────────────────
+
+        /** File extensions recognised as LoRA weights */
+        const LORA_EXTENSIONS = [".safetensors", ".ckpt", ".pt", ".bin"];
+
+        /**
+         * Returns all entries in loraList whose basename matches the
+         * given filename (case-insensitive).
+         *
+         * @param {string}   filename - Basename from a dropped File object
+         * @param {string[]} loraList - available_loras from nodeData
+         * @returns {string[]} Matching LoRA paths (may be empty)
+         */
+        const matchLorasByFilename = (filename, loraList) => {
+            const needle = filename.toLowerCase();
+            return loraList.filter(loraPath => {
+                if (loraPath === "None") return false;
+                const basename = loraPath.split(/[/\\]/).pop().toLowerCase();
+                return basename === needle;
+            });
+        };
+
+        /**
+         * Returns true if a DragEvent is carrying files.
+         * @param {DragEvent} e
+         * @returns {boolean}
+         */
+        const isDraggingFiles = (e) => !!e?.dataTransfer?.types?.includes("Files");
+
+        /**
+         * Core drop handler shared by both the DOM-widget container
+         * listener and the prototype onDragDrop callback.
+         *
+         * Matches dropped LoRA filenames against the available list,
+         * adds new rows, and alerts on any unmatched files.
+         *
+         * @param {LGraphNode} node
+         * @param {FileList|File[]} files
+         * @returns {boolean} true if any LoRA-like files were processed
+         */
+        const handleLoraFileDrop = (node, files) => {
+            const droppedFiles = Array.from(files).filter(f =>
+                LORA_EXTENSIONS.some(ext => f.name.toLowerCase().endsWith(ext))
+            );
+            if (droppedFiles.length === 0) return false;
+
+            const loraList = nodeData.input.hidden.available_loras[0];
+            const data = JSON.parse(node.properties.lora_data || "[]");
+            const notFound = [];
+
+            for (const file of droppedFiles) {
+                const matches = matchLorasByFilename(file.name, loraList);
+                if (matches.length === 0) {
+                    notFound.push(file.name);
+                    continue;
+                }
+                for (const loraPath of matches) {
+                    // Skip if this LoRA is already in the list
+                    if (data.some(row => row.lora === loraPath)) continue;
+                    data.push({
+                        on: true, lora: loraPath,
+                        str: 1.0, vid: 1.0, v2a: 1.0,
+                        aud: 1.0, a2v: 1.0, other: 1.0
+                    });
+                }
+            }
+
+            node.properties.lora_data = JSON.stringify(data);
+            syncToBackend(node);
+            resizeNode(node);
+
+            if (node._mllRowsContainer && node._mllNodeData) {
+                renderRows(node, node._mllRowsContainer, node._mllNodeData);
+            }
+
+            if (notFound.length > 0) {
+                alert(
+                    "The following files were not found in the LoRA folder:\n\n"
+                    + notFound.join("\n")
+                    + "\n\nMake sure they are in your ComfyUI loras directory "
+                    + "and refresh the browser."
+                );
+            }
+
+            return true;
         };
 
         /**
@@ -1032,6 +1129,41 @@ app.registerExtension({
 
             const nodeRef = this;
 
+            // ── Drag-and-drop directly on the DOM widget ──
+            // The DOM widget overlay sits above the canvas in both
+            // LiteGraph and Nodes 2.0 Vue renderers, intercepting
+            // drag events before ComfyUI's canvas-level dispatch
+            // can route them to node.onDragOver / onDragDrop.
+            // We handle dragover/drop here with stopPropagation so
+            // the app-level handler never tries to open the files
+            // as a workflow ("Unable to find workflow" toast).
+
+            container.addEventListener("dragover", (e) => {
+                if (!isDraggingFiles(e)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = "copy";
+                container.classList.add("mll-drag-over");
+            });
+
+            container.addEventListener("dragleave", (e) => {
+                // Only remove the highlight when leaving the container
+                // itself, not when moving between child elements.
+                if (container.contains(e.relatedTarget)) return;
+                container.classList.remove("mll-drag-over");
+            });
+
+            container.addEventListener("drop", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                container.classList.remove("mll-drag-over");
+
+                const files = e?.dataTransfer?.files;
+                if (files && files.length > 0) {
+                    handleLoraFileDrop(nodeRef, files);
+                }
+            });
+
             // ── Header ──
             const header = document.createElement("div");
             header.className = "mll-header";
@@ -1104,6 +1236,50 @@ app.registerExtension({
                 renderRows(this, this._mllRowsContainer, this._mllNodeData);
                 requestAnimationFrame(() => resizeNode(this));
             }
+        };
+
+        // ─────────────────────────────────────────────
+        //  Drag-and-Drop — add LoRAs by dropping files
+        // ─────────────────────────────────────────────
+
+        const origOnDragOver = nodeType.prototype.onDragOver;
+        /**
+         * Accepts drag events when files are being dragged over the node.
+         * Chains with any existing onDragOver handler.
+         */
+        nodeType.prototype.onDragOver = function (e) {
+            if (origOnDragOver) {
+                const handled = origOnDragOver.apply(this, arguments);
+                if (handled != null) return handled;
+            }
+            // Accept if the drag contains files
+            return !!e?.dataTransfer?.types?.includes("Files");
+        };
+
+        const origOnDragDrop = nodeType.prototype.onDragDrop;
+        /**
+         * Handles file drops on the non-DOM-widget area of the node
+         * (e.g. title bar in LiteGraph mode).  Delegates to the
+         * shared handleLoraFileDrop helper.
+         */
+        nodeType.prototype.onDragDrop = async function (e) {
+            if (origOnDragDrop) {
+                const handled = await origOnDragDrop.apply(this, arguments);
+                if (handled) return handled;
+            }
+
+            const files = e?.dataTransfer?.files;
+            if (!files || files.length === 0) return false;
+
+            const result = handleLoraFileDrop(this, files);
+            if (result) {
+                // Stop the event from reaching app.ts's document-level
+                // drop handler which would otherwise try to open the
+                // files as a workflow ("Unable to find workflow" toast).
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            return result;
         };
     }
 });
