@@ -20,12 +20,15 @@ A powerful multi-LoRA management node for ComfyUI with optional LTX2 layer-speci
   - **A2V** (Audio-to-Video): Cross-modal attention (audio to video)
   - **Other**: Remaining network components
 - **Intuitive UI**: Drag-and-drop row reordering, toggle enable/disable, click-to-edit or drag-to-slide values
+- **Drag-and-Drop File Import**: Drop LoRA files onto the node to quickly add them — matches by filename against your existing LoRA library
 - **Missing LoRA Detection**: LoRAs that no longer exist on disk are shown with red strikethrough text on session load, so you can spot moved or deleted files at a glance
 - **rgthree LoRA Info Integration**: Right-click any LoRA name to open the rgthree LoRA info dialog (requires [rgthree-comfy](https://github.com/rgthree/rgthree-comfy)). LoRAs with fetched info display a circled info badge next to their name (green for Civitai data, gray for local info). Fetching new info from Civitai in the dialog updates the badge immediately on close
 - **Optional Model/CLIP Input**: Use as a standalone LoRA manager even without model or CLIP connected
 - **JSON Output**: Export a rich JSON structure of all selected LoRAs for external processing
 - **Raw Config Editor**: Click the cog button to copy/paste the entire LoRA configuration as JSON
 - **Sidecar Metadata Support**: Automatically loads metadata from `.json` sidecar files alongside LoRA weights
+- **MultiLoRA Cycle** (companion node): Automatically iterate through LoRAs at multiple strengths for batch testing — ideal for evaluating training checkpoints
+- **Parse JSON** (companion node): Convert the `lora_data` JSON output into a Python object for use with scripting nodes like [rgthree](https://github.com/rgthree/rgthree-comfy)'s Power Puter
 
 ## Installation
 
@@ -70,9 +73,18 @@ A powerful multi-LoRA management node for ComfyUI with optional LTX2 layer-speci
 | **STR / Vid / V2A / Aud / A2V / Other** | Drag or click | Adjust strengths |
 | **X** (Trash) | Click | Delete the row |
 | **+ Add LoRA** | Click | Add a new empty row |
+| **Drop zone** | Drop files | Drop LoRA files to add by filename match (files must already be in your loras directory) |
 
-### Outputs
+> **Note on drag-and-drop:** No files are copied — this is a shortcut for selecting LoRAs from the menu. Dropped files are matched by filename (case-insensitive) against LoRAs already in your ComfyUI `models/loras` directory. If a file isn't found, an alert lists the unmatched filenames.
 
+### Inputs and Outputs
+
+**Inputs** (all optional):
+- **model**: Model to apply LoRAs to
+- **clip**: CLIP to apply LoRAs to (standard mode only)
+- **load_options**: Connect a [MultiLoRA Cycle](#multilora-cycle) node here for automated iteration
+
+**Outputs**:
 - **model**: The input model with all active LoRAs applied
 - **clip**: The input CLIP with LoRAs applied (standard mode only; LTX mode passes CLIP through unchanged)
 - **lora_data**: JSON string containing metadata for all selected LoRAs (enabled and disabled)
@@ -137,6 +149,93 @@ You can also hand-edit workflows in the saved JSON file:
 2. Locate your node's `properties.lora_data` field
 3. Edit the LoRA list directly
 4. Save and reload in ComfyUI
+
+## Companion Nodes
+
+### MultiLoRA Cycle
+
+Automatically iterates through LoRAs in your Multi LoRA Loader at multiple strength values across queue runs. Designed for batch-testing LoRA training checkpoints — load all your checkpoints into the loader, set a list of strengths to test, and let it cycle through every combination.
+
+![MultiLoRA Cycle](./example_workflows/multi_lora_cycle.png)
+
+#### Setup
+
+1. Add LoRAs to your **Multi LoRA Loader** (via the UI, cog button, or drag-and-drop)
+2. Add a **MultiLoRA Cycle** node (found under **Loaders**)
+3. Connect its `load_options` output to the loader's `load_options` input
+4. Set your test strengths as a comma-separated list (e.g. `0.5,0.75,1.0,1.25`)
+5. Set `mode` to `increment`
+6. Enable **auto-queue** in ComfyUI and hit **Queue**
+
+The cycle node walks through every LoRA at every strength, one per queue run. The loader's UI updates in real time to show which LoRA is active and at what strength.
+
+#### Widgets
+
+| Widget | Type | Description |
+|--------|------|-------------|
+| **strengths** | STRING | Comma-separated strength values to test (e.g. `0.5,0.75,1.0`). Negative and zero values are valid. |
+| **lora_index** | INT | Current LoRA position (1-based). Auto-incremented when all strengths for the current LoRA are exhausted. |
+| **strength_index** | INT | Current strength position (1-based). Auto-incremented each queue run. |
+| **mode** | COMBO | `increment` auto-advances each run; `fixed` stays on the current indices. |
+| **loop** | BOOLEAN | When all combinations are exhausted, wrap back to the start instead of stopping. |
+
+#### Display
+
+The node shows a status line at the bottom:
+
+```
+my_training-000800 (3/7) | STR: 0.75 (2/4)
+```
+
+This tells you: LoRA 3 of 7 is active, at strength value 2 of 4 (0.75). When all combinations are done and `loop` is off, it shows `Done (7 LoRAs x 4 strengths)`.
+
+#### How Cycling Works
+
+- Each queue run increments `strength_index`
+- When `strength_index` exceeds the number of strengths, it resets to 1 and `lora_index` advances
+- When `lora_index` exceeds the number of LoRAs: wraps to 1 if `loop` is on, or stops (all LoRAs disabled) if off
+- The first queue run after setting up uses the current indices as-is (no increment on the first run)
+
+#### Stopping and Resuming
+
+- Stop auto-queue at any time — the indices stay where they are
+- Manually adjust `lora_index` or `strength_index` to jump to any position
+- The display updates immediately when you change the indices
+
+#### Saved Metadata
+
+When output files are generated, the cycle node's `mode` is automatically saved as `fixed` in the workflow metadata. This means loading a workflow from an output file won't accidentally start auto-cycling — you'll see the exact LoRA and strength that produced that output.
+
+---
+
+### Parse JSON
+
+Converts a JSON string into a native Python object (list, dict, number, etc.). Connect it to the Multi LoRA Loader's `lora_data` output to feed structured LoRA data to nodes that accept any-type inputs.
+
+![Parse JSON](./example_workflows/parse_json.png)
+
+| Port | Type | Description |
+|------|------|-------------|
+| **json_string** (input) | STRING | A JSON-encoded string (e.g. the `lora_data` output) |
+| **data** (output) | * (any) | The parsed Python object |
+
+#### Usage with Power Puter
+
+This node pairs well with [rgthree-comfy](https://github.com/rgthree/rgthree-comfy)'s **Power Puter** node, which lets you write inline Python expressions in your workflow. Connect the Parse JSON output to a Power Puter input to extract and format LoRA information.
+
+**Example:** Generate a text overlay showing active LoRA names and strengths:
+
+```python
+'\n'.join([l['name'].split('\\')[-1].rsplit('.', 1)[0] + ': ' + str(l['strength_model']) for l in a if l['enabled']]) if a else 'No active loras'
+```
+
+This produces output like:
+```
+my_training-000800: 0.75
+style_lora: 1.0
+```
+
+---
 
 ## Migration
 

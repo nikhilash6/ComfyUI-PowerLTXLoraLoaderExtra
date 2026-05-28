@@ -4,6 +4,7 @@ import folder_paths
 import comfy.lora
 import comfy.sd
 import comfy.utils
+from .data_utils import update_node_in_workflow
 
 
 class MultiLoRALoader:
@@ -25,6 +26,12 @@ class MultiLoRALoader:
                 # output lora_data JSON even when neither is connected.
                 "model": ("MODEL",),
                 "clip": ("CLIP",),
+                # When connected to a MultiLoRA_Cycle node, enables
+                # automated iteration through LoRAs and strengths.
+                # The cycle node's JS mutates lora_data before
+                # serialization, so by the time Python runs the data
+                # is already correct.
+                "load_options": ("LOAD_OPTIONS",),
             },
             "hidden": {"available_loras": (lora_list,)}
         }
@@ -119,7 +126,7 @@ class MultiLoRALoader:
     # ─────────────────────────────────────────────
 
     def load_loras(self, lora_data, ltx_mode=False, model=None, clip=None,
-                   available_loras=None):
+                   available_loras=None, load_options=None):
         """
         Applies every active LoRA to the model (and optionally CLIP) and
         returns the patched model, CLIP, and a JSON string of rich LoRA
@@ -157,11 +164,15 @@ class MultiLoRALoader:
         new_model = model.clone()
         new_clip = clip
 
+        # When a cycle node is driving iteration, allow zero-strength
+        # LoRAs through (0 is a valid test strength).
+        cycling = isinstance(load_options, dict) and load_options.get("cycling")
+
         for row in data:
             # Only apply LoRAs that are enabled, selected, and have non-zero strength
             if not row.get("on") or row.get("lora") == "None":
                 continue
-            if float(row.get("str", 1.0)) == 0:
+            if not cycling and float(row.get("str", 1.0)) == 0:
                 continue
 
             lora_name = row.get("lora")
@@ -304,3 +315,130 @@ class MultiLoRA_ParseJSON:
             return (json.loads(json_string),)
         except Exception as e:
             raise ValueError(f"[Parse JSON] Invalid JSON: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════
+#  MultiLoRA Cycle — iterate LoRAs × strengths across queue runs
+# ═══════════════════════════════════════════════════════════════
+
+class MultiLoRA_Cycle:
+    """Cycles through LoRAs and strengths in a connected MultiLoRALoader.
+
+    Connect the ``load_options`` output to a MultiLoRALoader's
+    ``load_options`` input.  The companion JS frontend handles all
+    mutation of the loader's LoRA table via the ``beforeQueued`` hook
+    — by the time Python executes, the loader already has the correct
+    ``lora_data`` for this iteration.
+
+    The Python side packages informational metadata into the
+    ``LOAD_OPTIONS`` output so the loader (and downstream nodes)
+    can detect that cycling is active.
+    """
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "strengths": ("STRING", {
+                    "default": "0.5,0.75,1.0",
+                    "tooltip": "Comma-separated strength values to cycle through for each LoRA.",
+                }),
+                "lora_index": ("INT", {
+                    "default": 1, "min": 1, "max": 9999, "step": 1,
+                    "tooltip": "Current LoRA position (1-based). Auto-incremented by the JS frontend when mode is 'increment'.",
+                }),
+                "strength_index": ("INT", {
+                    "default": 1, "min": 1, "max": 9999, "step": 1,
+                    "tooltip": "Current strength position (1-based). Auto-incremented each queue run.",
+                }),
+                "mode": (["increment", "fixed"], {
+                    "default": "increment",
+                    "tooltip": "'increment' auto-advances each run; 'fixed' stays on the current indices.",
+                }),
+                "loop": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "When all combinations are exhausted, wrap back to the start instead of stopping.",
+                }),
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+                "prompt": "PROMPT",
+            },
+        }
+
+    RETURN_TYPES = ("LOAD_OPTIONS",)
+    RETURN_NAMES = ("load_options",)
+    FUNCTION = "cycle"
+    CATEGORY = "loaders"
+    DESCRIPTION = (
+        "Cycles through LoRAs and strength values in a connected "
+        "Multi LoRA Loader.  Set strengths as a comma-separated list, "
+        "connect to the loader, and queue repeatedly to iterate."
+    )
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        # Always re-execute — the whole point is that state changes each run.
+        return float("NaN")
+
+    def cycle(self, strengths, lora_index, strength_index, mode, loop,
+              unique_id=None, extra_pnginfo=None, prompt=None):
+        # Parse the strength list
+        strength_list = []
+        for s in strengths.split(","):
+            s = s.strip()
+            if s:
+                try:
+                    strength_list.append(float(s))
+                except ValueError:
+                    pass
+        if not strength_list:
+            strength_list = [1.0]
+
+        # Convert 1-based user indices to 0-based internal indices
+        s_idx = max(0, min(strength_index - 1, len(strength_list) - 1))
+        active_strength = strength_list[s_idx]
+
+        # ── Patch saved metadata so loaded workflows use "fixed" mode ──
+        # This only affects the data embedded in output files (PNG/video
+        # metadata).  The live workflow's mode widget is not changed.
+        #
+        # Widget order in widgets_values:
+        #   0: strengths
+        #   1: lora_index
+        #   2: strength_index
+        #   3: mode           ← change to "fixed"
+        #   4: loop
+        MODE_WIDGET_INDEX = 3
+
+        # Update the workflow JSON (becomes EXTRA_PNGINFO in output files)
+        workflow = None
+        if isinstance(extra_pnginfo, list) and len(extra_pnginfo) > 0:
+            workflow = extra_pnginfo[0].get("workflow")
+        elif isinstance(extra_pnginfo, dict):
+            workflow = extra_pnginfo.get("workflow")
+
+        if workflow:
+            def apply_cycle_changes(node):
+                if "widgets_values" in node:
+                    if len(node["widgets_values"]) > MODE_WIDGET_INDEX:
+                        node["widgets_values"][MODE_WIDGET_INDEX] = "fixed"
+
+            update_node_in_workflow(workflow, unique_id, apply_cycle_changes)
+
+        # Update the prompt dict (API-format data saved alongside workflow)
+        if prompt and unique_id is not None:
+            node_id_str = str(unique_id)
+            if node_id_str in prompt:
+                prompt[node_id_str]["inputs"]["mode"] = "fixed"
+
+        return ({
+            "cycling": True,
+            "lora_index": lora_index,
+            "strength_index": strength_index,
+            "strength": active_strength,
+            "total_strengths": len(strength_list),
+            "mode": mode,
+            "loop": loop,
+        },)

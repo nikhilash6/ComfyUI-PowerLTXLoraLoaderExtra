@@ -602,10 +602,12 @@ app.registerExtension({
 
             if (notFound.length > 0) {
                 alert(
-                    "The following files were not found in the LoRA folder:\n\n"
+                    "The following files were not found in your LoRA library:\n\n"
                     + notFound.join("\n")
-                    + "\n\nMake sure they are in your ComfyUI loras directory "
-                    + "and refresh the browser."
+                    + "\n\nDrag-and-drop matches by filename \u2014 it does not "
+                    + "copy files. To use these LoRAs, copy them into your "
+                    + "ComfyUI models/loras directory first, then refresh "
+                    + "the browser and try again."
                 );
             }
 
@@ -1198,6 +1200,14 @@ app.registerExtension({
             this._mllRowsContainer = rowsContainer;
             this._mllHeader = header;
             this._mllNodeData = nodeData;
+
+            // ── Public API for external nodes (e.g. MultiLoRA Cycle) ──
+            this.updateLoraData = (newData) => {
+                nodeRef.properties.lora_data = newData;
+                syncToBackend(nodeRef);
+                resizeNode(nodeRef);
+                renderRows(nodeRef, rowsContainer, nodeData);
+            };
 
             // ── Register as DOM widget ──
             this.addDOMWidget("lora_ui", "custom", container, {
