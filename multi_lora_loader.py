@@ -4,6 +4,7 @@ import folder_paths
 import comfy.lora
 import comfy.sd
 import comfy.utils
+from comfy_execution.graph_utils import ExecutionBlocker
 from .data_utils import update_node_in_workflow
 
 
@@ -382,6 +383,37 @@ class MultiLoRA_Cycle:
         # Always re-execute — the whole point is that state changes each run.
         return float("NaN")
 
+    @staticmethod
+    def _count_loader_loras(prompt, unique_id):
+        """Count non-"None" LoRA rows in the connected MultiLoRALoader.
+
+        Walks the prompt dict to find a MultiLoRALoader whose
+        ``load_options`` input is linked to this cycle node, then
+        parses its ``lora_data`` and counts valid rows.
+
+        Returns 0 if no loader is found or data is unparseable.
+        """
+        if not prompt or unique_id is None:
+            return 0
+
+        uid_str = str(unique_id)
+        for _node_id, node_data in prompt.items():
+            if node_data.get("class_type") != "MultiLoRALoader":
+                continue
+            inputs = node_data.get("inputs", {})
+            lo = inputs.get("load_options")
+            # Connected inputs are serialised as [source_node_id, output_index]
+            if isinstance(lo, list) and len(lo) >= 2 and str(lo[0]) == uid_str:
+                try:
+                    rows = json.loads(inputs.get("lora_data", "[]"))
+                    return sum(
+                        1 for r in rows
+                        if r.get("lora") and r["lora"] != "None"
+                    )
+                except Exception:
+                    return 0
+        return 0
+
     def cycle(self, strengths, lora_index, strength_index, mode, loop,
               unique_id=None, extra_pnginfo=None, prompt=None):
         # Parse the strength list
@@ -399,6 +431,19 @@ class MultiLoRA_Cycle:
         # Convert 1-based user indices to 0-based internal indices
         s_idx = max(0, min(strength_index - 1, len(strength_list) - 1))
         active_strength = strength_list[s_idx]
+
+        # ── Halt execution when all combinations are exhausted ──
+        # In increment mode with loop off, the JS frontend sets
+        # lora_index past the end once every LoRA × strength pair
+        # has been processed.  Return an ExecutionBlocker to stop
+        # downstream execution and halt instant-mode auto-queue.
+        if mode == "increment" and not loop:
+            lora_count = self._count_loader_loras(prompt, unique_id)
+            if lora_count > 0 and lora_index > lora_count:
+                return (ExecutionBlocker(
+                    "MultiLoRA Cycle complete \u2014 all LoRA/strength "
+                    "combinations have been processed."
+                ),)
 
         # ── Patch saved metadata so loaded workflows use "fixed" mode ──
         # This only affects the data embedded in output files (PNG/video

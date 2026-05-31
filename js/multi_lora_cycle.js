@@ -314,6 +314,9 @@ app.registerExtension({
                 loraIdxWidget[HAS_EXECUTED] = false;
 
                 loraIdxWidget.beforeQueued = (options) => {
+                    // Skip all cycle logic if this node is bypassed (4) or muted (2)
+                    if (nodeRef.mode === 2 || nodeRef.mode === 4) return;
+
                     // Allow cycle to run on partial execution too — the
                     // loader mutation should always reflect current state.
                     // if (options?.isPartialExecution) return;
@@ -368,7 +371,8 @@ app.registerExtension({
 
                     // ── Mutate the connected loader's lora_data ──
                     // Convert 1-based widget values to 0-based array indices
-                    if (loader) {
+                    // Skip mutation if the loader is bypassed (4) or muted (2)
+                    if (loader && loader.mode !== 2 && loader.mode !== 4) {
                         const lIdx = (loraIdxWidget.value ?? 1) - 1;
                         const sIdx = (strIdxWidget?.value ?? 1) - 1;
                         const clampedSIdx = Math.max(0, Math.min(sIdx, strCount - 1));
