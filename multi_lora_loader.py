@@ -185,7 +185,28 @@ class MultiLoRALoader:
             strength_model = float(row.get("str", 1.0))
 
             if ltx_mode:
-                # ── LTX mode: per-layer attention strength filtering ──
+                # ── LTX mode: per-layer-group strength scaling ──
+                #
+                # Each layer group (video, video_to_audio, audio,
+                # audio_to_video, other) gets its own multiplier.  The
+                # final per-layer scale applied to the LoRA is:
+                #
+                #     strength_model × group_multiplier
+                #
+                # We achieve this by splitting the loaded LoRA patches into
+                # per-group buckets and calling add_patches() once per bucket
+                # with that bucket's scaled strength.
+                #
+                # IMPORTANT: we deliberately DO NOT rewrite the per-key alpha
+                # (patch tuple index [2]).  ComfyUI's calculate_weight does:
+                #     alpha_term = (alpha / rank) if alpha is not None else 1.0
+                #     weight += (strength * alpha_term) * lora_diff
+                # Most LTX2 LoRAs ship WITHOUT an .alpha key, so alpha is None
+                # and alpha_term is 1.0.  Writing alpha = multiplier would flip
+                # that branch and divide by rank (multiplier / rank ≈ near-zero),
+                # collapsing the LoRA and producing fuzzy output.  Passing the
+                # multiplier through add_patches' strength is correct whether or
+                # not the LoRA carries an alpha.
                 video           = float(row.get("vid", 1.0))
                 video_to_audio  = float(row.get("v2a", 1.0))
                 audio           = float(row.get("aud", 1.0))
@@ -198,47 +219,43 @@ class MultiLoRALoader:
                 key_map = comfy.lora.model_lora_keys_unet(new_model.model, key_map)
                 loaded = comfy.lora.load_lora(lora, key_map)
 
-                keys_to_delete = []
+                # Split patches into per-group buckets using the same
+                # prioritised keyword matching used by KJNodes' loader.
+                buckets = {
+                    "video":          (video, {}),
+                    "video_to_audio": (video_to_audio, {}),
+                    "audio":          (audio, {}),
+                    "audio_to_video": (audio_to_video, {}),
+                    "other":          (other, {}),
+                }
 
                 for key in list(loaded.keys()):
                     key_str = key if isinstance(key, str) else (
                         key[0] if isinstance(key, tuple) else str(key)
                     )
-                    strength_multiplier = None
 
-                    # Prioritised keyword matching for LTX2 attention layers
+                    # Order matters: most specific patterns first.
                     if "video_to_audio_attn" in key_str:
-                        strength_multiplier = video_to_audio
+                        group = "video_to_audio"
                     elif "audio_to_video_attn" in key_str:
-                        strength_multiplier = audio_to_video
+                        group = "audio_to_video"
                     elif "audio_attn" in key_str or "audio_ff.net" in key_str:
-                        strength_multiplier = audio
+                        group = "audio"
                     elif "attn" in key_str or "ff.net" in key_str:
-                        strength_multiplier = video
+                        group = "video"
                     else:
-                        strength_multiplier = other
+                        group = "other"
 
-                    # Apply multiplier to the alpha weights
-                    if strength_multiplier is not None:
-                        if strength_multiplier == 0:
-                            keys_to_delete.append(key)
-                        elif strength_multiplier != 1.0:
-                            value = loaded[key]
-                            if hasattr(value, "weights"):
-                                weights_list = list(value.weights)
-                                current_alpha = (
-                                    weights_list[2]
-                                    if weights_list[2] is not None
-                                    else 1.0
-                                )
-                                weights_list[2] = current_alpha * strength_multiplier
-                                loaded[key].weights = tuple(weights_list)
+                    buckets[group][1][key] = loaded[key]
 
-                for key in keys_to_delete:
-                    if key in loaded:
-                        del loaded[key]
-
-                new_model.add_patches(loaded, strength_model)
+                # Apply each bucket with its own scaled strength.  A
+                # multiplier of 0 drops the bucket entirely (no patch added).
+                for _group, (multiplier, patches) in buckets.items():
+                    if not patches:
+                        continue
+                    if multiplier == 0:
+                        continue
+                    new_model.add_patches(patches, strength_model * multiplier)
                 # CLIP unchanged in LTX mode (LTX LoRAs don't train CLIP)
 
             else:
