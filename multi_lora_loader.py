@@ -2,6 +2,7 @@ import os
 import json
 import folder_paths
 import comfy.lora
+import comfy.lora_convert
 import comfy.sd
 import comfy.utils
 from comfy_execution.graph_utils import ExecutionBlocker
@@ -100,6 +101,47 @@ class MultiLoRALoader:
 
             result.append(entry)
         return result
+
+    # ─────────────────────────────────────────────
+    #  Helper: warn when LoRA keys fail to map
+    # ─────────────────────────────────────────────
+
+    @staticmethod
+    def _warn_on_key_mismatch(lora_name, lora_dict, loaded):
+        """Print a concise WARNING when not every LoRA module in the file
+        mapped onto the model.
+
+        ``loaded`` is the dict returned by ``comfy.lora.load_lora`` (one
+        entry per successfully-mapped module).  We compare its size against
+        the number of LoRA modules present in the raw file (counted via the
+        ``lora_down``/``lora_B``/``lora.down`` style "down" tensors, which
+        appear exactly once per module across the formats Comfy supports).
+
+        Counts only — no key names.  Silent when everything matches, in
+        line with the node's existing fail-quietly behaviour.
+        """
+        try:
+            total = sum(
+                1 for k in lora_dict.keys()
+                if k.endswith(".lora_down.weight")        # regular / kohya
+                or k.endswith(".lora_A.weight")           # diffusers / peft
+                or k.endswith("_lora.down.weight")        # diffusers alt
+                or k.endswith(".lora.down.weight")        # diffusers alt2
+                or k.endswith(".lora_A")                   # mochi
+                or k.endswith(".lora_linear_layer.down.weight")  # transformers
+                or k.endswith(".lora_A.default.weight")    # qwen default
+            )
+        except Exception:
+            return
+
+        matched = len(loaded)
+        if total > 0 and matched < total:
+            print(
+                f"[MultiLoRALoader] WARNING: {lora_name}: "
+                f"{matched}/{total} LoRA modules mapped onto the model "
+                f"({total - matched} unmatched). Mismatched keys are "
+                f"ignored; output may differ from expectations."
+            )
 
     # ─────────────────────────────────────────────
     #  Public API: loras()
@@ -219,6 +261,8 @@ class MultiLoRALoader:
                 key_map = comfy.lora.model_lora_keys_unet(new_model.model, key_map)
                 loaded = comfy.lora.load_lora(lora, key_map)
 
+                self._warn_on_key_mismatch(lora_name, lora, loaded)
+
                 # Split patches into per-group buckets using the same
                 # prioritised keyword matching used by KJNodes' loader.
                 buckets = {
@@ -261,6 +305,28 @@ class MultiLoRALoader:
             else:
                 # ── Standard mode: uniform LoRA application ──
                 lora_file = comfy.utils.load_torch_file(path, safe_load=True)
+
+                # Diagnostic: replicate the model+clip key mapping that
+                # load_lora_for_models performs internally so we can warn
+                # when some modules fail to map.  load_lora_for_models does
+                # not expose its loaded dict, so we recompute it here.
+                try:
+                    diag_map = {}
+                    diag_map = comfy.lora.model_lora_keys_unet(
+                        new_model.model, diag_map
+                    )
+                    if new_clip is not None:
+                        diag_map = comfy.lora.model_lora_keys_clip(
+                            new_clip.cond_stage_model, diag_map
+                        )
+                    diag_lora = comfy.lora_convert.convert_lora(lora_file)
+                    diag_loaded = comfy.lora.load_lora(
+                        diag_lora, diag_map, log_missing=False
+                    )
+                    self._warn_on_key_mismatch(lora_name, diag_lora, diag_loaded)
+                except Exception:
+                    pass
+
                 new_model, new_clip = comfy.sd.load_lora_for_models(
                     new_model, new_clip, lora_file,
                     strength_model, strength_model
