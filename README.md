@@ -12,6 +12,7 @@ A powerful multi-LoRA management node for ComfyUI with optional LTX2 layer-speci
 - **Two Modes**:
   - **Standard mode**: Single strength value per LoRA, applied uniformly via ComfyUI's built-in loader
   - **LTX mode**: Per-layer strength control for LTX2 video/audio models (enable via the LTX checkbox)
+- **Independent CLIP Strength**: Enable the **CLIP** checkbox to add a per-LoRA CLIP strength column (right after STR), letting you scale CLIP separately from the model. When off, the STR value is used for both model and CLIP (previous behaviour)
 - **LTX Layer Controls** (when LTX mode is enabled):
   - **STR** (Strength Model): Overall model strength
   - **Vid** (Video): Video attention layers
@@ -57,12 +58,14 @@ A powerful multi-LoRA management node for ComfyUI with optional LTX2 layer-speci
 7. Drag rows by the grip handle to reorder
 8. Click the X to delete a row
 9. Enable the **LTX** checkbox to show per-layer strength columns
+10. Enable the **CLIP** checkbox to show a separate CLIP strength column
 
 ### UI Elements
 
 | Element | Action | Purpose |
 |---------|--------|---------|
 | **LTX** (Checkbox) | Click | Toggle LTX per-layer mode on/off |
+| **CLIP** (Checkbox) | Click | Toggle a separate per-LoRA CLIP strength column on/off |
 | **Cog** | Click | Open raw JSON editor for copy/paste/sharing |
 | **Grip** | Drag vertically | Reorder LoRA rows |
 | **Dot** (Toggle) | Click | Enable/disable the LoRA |
@@ -70,7 +73,7 @@ A powerful multi-LoRA management node for ComfyUI with optional LTX2 layer-speci
 | **LoRA Name** | Right-click | Show LoRA Info (requires rgthree-comfy) |
 | **Info badge** | — | Indicates fetched LoRA info (green = Civitai, gray = local) |
 | **~~Strikethrough~~** | — | LoRA file not found on disk (hover for tooltip) |
-| **STR / Vid / V2A / Aud / A2V / Other** | Drag or click | Adjust strengths |
+| **STR / CLIP / Vid / V2A / Aud / A2V / Other** | Drag or click | Adjust strengths (CLIP shown when the CLIP checkbox is enabled) |
 | **X** (Trash) | Click | Delete the row |
 | **+ Add LoRA** | Click | Add a new empty row |
 | **Drop zone** | Drop files | Drop LoRA files to add by filename match (files must already be in your loras directory) |
@@ -86,7 +89,7 @@ A powerful multi-LoRA management node for ComfyUI with optional LTX2 layer-speci
 
 **Outputs**:
 - **model**: The input model with all active LoRAs applied
-- **clip**: The input CLIP with LoRAs applied (standard mode only; LTX mode passes CLIP through unchanged)
+- **clip**: The input CLIP with LoRAs applied (standard mode only; LTX mode passes CLIP through unchanged). With the CLIP checkbox enabled, each LoRA's CLIP strength comes from its own CLIP column instead of reusing STR
 - **lora_data**: JSON string containing metadata for all selected LoRAs (enabled and disabled)
 
 ### rgthree Integration
@@ -114,6 +117,7 @@ The `lora_data` output includes all LoRAs with selected weights:
     "path": "/path/to/my_lora.safetensors",
     "enabled": true,
     "strength_model": 1.0,
+    "strength_clip": 1.0,
     "video": 0.8,
     "video_to_audio": 1.0,
     "audio": 0.5,
@@ -123,6 +127,8 @@ The `lora_data` output includes all LoRAs with selected weights:
   }
 ]
 ```
+
+> `strength_clip` is only present when the CLIP checkbox is enabled; the LTX layer keys (`video`, `audio`, etc.) are only present in LTX mode.
 
 ## Sharing and Batch Editing
 
@@ -138,8 +144,10 @@ The easiest way to share or batch-edit your LoRA configuration:
 
 **Example config:**
 ```json
-[{"on":true,"lora":"style_lora.safetensors","str":1.0,"vid":0.8,"v2a":1.0,"aud":0.5,"a2v":1.0,"other":1.0},{"on":false,"lora":"face_detail.safetensors","str":0.7,"vid":1.0,"v2a":1.0,"aud":1.0,"a2v":1.0,"other":1.0}]
+[{"on":true,"lora":"style_lora.safetensors","str":1.0,"clip":1.0,"vid":0.8,"v2a":1.0,"aud":0.5,"a2v":1.0,"other":1.0},{"on":false,"lora":"face_detail.safetensors","str":0.7,"clip":0.7,"vid":1.0,"v2a":1.0,"aud":1.0,"a2v":1.0,"other":1.0}]
 ```
+
+> The `clip` key holds each row's CLIP strength; it's only applied when the CLIP checkbox is enabled (otherwise `str` is used for CLIP too).
 
 ### Workflow JSON Editing
 

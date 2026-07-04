@@ -324,9 +324,12 @@ app.registerExtension({
 
         const MIN_WIDTH = 500;
 
-        /** Column key/label definitions for the 6 numeric columns */
-        const NUM_DEFS = [
-            { key: "str",   label: "STR"   },
+        /** Always-visible base column */
+        const STR_DEF   = { key: "str",  label: "STR"  };
+        /** Optional CLIP column (shown when clip_mode is on) */
+        const CLIP_DEF  = { key: "clip", label: "CLIP" };
+        /** LTX-specific columns (shown when ltx_mode is on) */
+        const LTX_DEFS  = [
             { key: "vid",   label: "Vid"   },
             { key: "v2a",   label: "V2A"   },
             { key: "aud",   label: "Aud"   },
@@ -334,13 +337,11 @@ app.registerExtension({
             { key: "other", label: "Other" },
         ];
 
-        /** STR-only column list for standard (non-LTX) mode */
-        const STD_DEFS = [NUM_DEFS[0]];
-
         /** Creates a default empty LoRA row */
         const makeEmptyRow = () => ({
             on: true, lora: "None",
-            str: 1.0, vid: 1.0, v2a: 1.0, aud: 1.0, a2v: 1.0, other: 1.0
+            str: 1.0, clip: 1.0,
+            vid: 1.0, v2a: 1.0, aud: 1.0, a2v: 1.0, other: 1.0
         });
 
         // ─────────────────────────────────────────────
@@ -368,12 +369,36 @@ app.registerExtension({
         };
 
         /**
-         * Returns the column definitions to display based on LTX mode.
+         * Reads the current clip_mode value from the hidden widget.
+         * @param {LGraphNode} node
+         * @returns {boolean}
+         */
+        const getClipMode = (node) => {
+            const w = node.widgets?.find(w => w.name === "clip_mode");
+            return w ? w.value : false;
+        };
+
+        /**
+         * Sets the clip_mode value on the hidden widget.
+         * @param {LGraphNode} node
+         * @param {boolean} val
+         */
+        const setClipMode = (node, val) => {
+            const w = node.widgets?.find(w => w.name === "clip_mode");
+            if (w) w.value = val;
+        };
+
+        /**
+         * Returns the column definitions to display based on the active
+         * modes.  Order: STR, [CLIP], then the LTX columns.
          * @param {LGraphNode} node
          * @returns {Array}
          */
         const getVisibleNumDefs = (node) => {
-            return getLtxMode(node) ? NUM_DEFS : STD_DEFS;
+            const defs = [STR_DEF];
+            if (getClipMode(node)) defs.push(CLIP_DEF);
+            if (getLtxMode(node)) defs.push(...LTX_DEFS);
+            return defs;
         };
 
         // ─────────────────────────────────────────────
@@ -586,7 +611,7 @@ app.registerExtension({
                     if (data.some(row => row.lora === loraPath)) continue;
                     data.push({
                         on: true, lora: loraPath,
-                        str: 1.0, vid: 1.0, v2a: 1.0,
+                        str: 1.0, clip: 1.0, vid: 1.0, v2a: 1.0,
                         aud: 1.0, a2v: 1.0, other: 1.0
                     });
                 }
@@ -646,6 +671,7 @@ app.registerExtension({
                             on:    row.on !== undefined ? row.on : true,
                             lora:  row.lora || "None",
                             str:   row.str !== undefined ? parseFloat(row.str) : 1.0,
+                            clip:  row.clip !== undefined ? parseFloat(row.clip) : 1.0,
                             vid:   row.vid !== undefined ? parseFloat(row.vid) : 1.0,
                             v2a:   row.v2a !== undefined ? parseFloat(row.v2a) : 1.0,
                             aud:   row.aud !== undefined ? parseFloat(row.aud) : 1.0,
@@ -689,6 +715,31 @@ app.registerExtension({
             ltxToggle.appendChild(ltxCheckbox);
             ltxToggle.appendChild(ltxLabel);
             headerEl.appendChild(ltxToggle);
+
+            // CLIP mode toggle — adds a per-row CLIP strength column
+            const clipToggle = document.createElement("label");
+            clipToggle.className = "mll-ltx-toggle";
+            if (getClipMode(node)) clipToggle.classList.add("mll-ltx-active");
+
+            const clipCheckbox = document.createElement("input");
+            clipCheckbox.type = "checkbox";
+            clipCheckbox.checked = getClipMode(node);
+            clipCheckbox.addEventListener("change", (e) => {
+                e.stopPropagation();
+                setClipMode(node, clipCheckbox.checked);
+                // Rebuild header (to show/hide the CLIP label) and rows
+                renderHeader(node, headerEl, nodeData, rowsContainer);
+                renderRows(node, rowsContainer, nodeData);
+                resizeNode(node);
+            });
+            clipCheckbox.addEventListener("pointerdown", (e) => e.stopPropagation());
+
+            const clipLabel = document.createElement("span");
+            clipLabel.textContent = "CLIP";
+
+            clipToggle.appendChild(clipCheckbox);
+            clipToggle.appendChild(clipLabel);
+            headerEl.appendChild(clipToggle);
 
             // Spacer pushes column labels to the right
             const headerSpacer = document.createElement("span");
@@ -845,7 +896,14 @@ app.registerExtension({
             for (const numDef of visibleDefs) {
                 const numEl = document.createElement("span");
                 numEl.className = "mll-num";
-                numEl.textContent = row[numDef.key].toFixed(2);
+                // Older saved rows may lack newer keys (e.g. "clip"); default
+                // any missing value to 1.0 so rendering never crashes.
+                let cellVal = row[numDef.key];
+                if (cellVal === undefined || cellVal === null) {
+                    cellVal = 1.0;
+                    row[numDef.key] = cellVal;
+                }
+                numEl.textContent = cellVal.toFixed(2);
                 numEl.dataset.key = numDef.key;
 
                 setupNumberDrag(numEl, numDef.key, rowIdx, node, rebuildFn);
@@ -1104,10 +1162,11 @@ app.registerExtension({
             };
             hideWidget("lora_data");
             hideWidget("ltx_mode");
+            hideWidget("clip_mode");
 
-            // Remove the lora_data and ltx_mode input slots — they're managed
-            // internally via properties and the hidden widgets.
-            for (const slotName of ["lora_data", "ltx_mode"]) {
+            // Remove the lora_data, ltx_mode and clip_mode input slots —
+            // they're managed internally via properties and hidden widgets.
+            for (const slotName of ["lora_data", "ltx_mode", "clip_mode"]) {
                 const slotIdx = this.inputs?.findIndex(inp => inp.name === slotName);
                 if (slotIdx !== undefined && slotIdx >= 0) {
                     this.removeInput(slotIdx);

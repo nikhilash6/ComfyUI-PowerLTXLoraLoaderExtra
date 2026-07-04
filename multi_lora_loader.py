@@ -22,6 +22,11 @@ class MultiLoRALoader:
                 # (Vid, V2A, Aud, A2V, Other).  When False, uses standard
                 # uniform LoRA application with just the STR value.
                 "ltx_mode": ("BOOLEAN", {"default": False}),
+                # When True, exposes a per-LoRA CLIP strength column (right
+                # after STR) so CLIP can be scaled independently of the model.
+                # When False, the STR value is used for both model and CLIP
+                # (matching the previous behaviour).
+                "clip_mode": ("BOOLEAN", {"default": False}),
             },
             "optional": {
                 # Model and CLIP are both optional — the node can still
@@ -50,7 +55,7 @@ class MultiLoRALoader:
     # ─────────────────────────────────────────────
 
     @staticmethod
-    def _build_lora_info(data, ltx_mode=False):
+    def _build_lora_info(data, ltx_mode=False, clip_mode=False):
         """
         Build a list of rich LoRA info dicts from raw row data.
 
@@ -91,6 +96,11 @@ class MultiLoRALoader:
                 "strength_model":  float(row.get("str", 1.0)),
                 "metadata":        info_data,
             }
+
+            if clip_mode:
+                entry["strength_clip"] = float(
+                    row.get("clip", row.get("str", 1.0))
+                )
 
             if ltx_mode:
                 entry["video"]           = float(row.get("vid", 1.0))
@@ -158,17 +168,21 @@ class MultiLoRALoader:
         inputs = prompt_node.get("inputs", {})
         lora_data_str = inputs.get("lora_data", "[]")
         ltx_mode = inputs.get("ltx_mode", False)
+        clip_mode = inputs.get("clip_mode", False)
         try:
             data = json.loads(lora_data_str)
         except Exception:
             return []
-        return cls._build_lora_info(data, ltx_mode=ltx_mode)
+        return cls._build_lora_info(
+            data, ltx_mode=ltx_mode, clip_mode=clip_mode
+        )
 
     # ─────────────────────────────────────────────
     #  Main Execution
     # ─────────────────────────────────────────────
 
-    def load_loras(self, lora_data, ltx_mode=False, model=None, clip=None,
+    def load_loras(self, lora_data, ltx_mode=False, clip_mode=False,
+                   model=None, clip=None,
                    available_loras=None, load_options=None):
         """
         Applies every active LoRA to the model (and optionally CLIP) and
@@ -196,7 +210,8 @@ class MultiLoRALoader:
 
         # Build the rich info list for the STRING output
         lora_info_json = json.dumps(
-            self._build_lora_info(data, ltx_mode=ltx_mode), indent=2
+            self._build_lora_info(data, ltx_mode=ltx_mode, clip_mode=clip_mode),
+            indent=2
         )
 
         # If no model is connected, skip LoRA patching entirely
@@ -327,9 +342,17 @@ class MultiLoRALoader:
                 except Exception:
                     pass
 
+                # In clip_mode the CLIP strength is taken from the per-row
+                # "clip" value; otherwise STR is reused for both (previous
+                # behaviour).
+                strength_clip = (
+                    float(row.get("clip", strength_model))
+                    if clip_mode else strength_model
+                )
+
                 new_model, new_clip = comfy.sd.load_lora_for_models(
                     new_model, new_clip, lora_file,
-                    strength_model, strength_model
+                    strength_model, strength_clip
                 )
 
         return (new_model, new_clip, lora_info_json)
