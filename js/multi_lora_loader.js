@@ -212,16 +212,23 @@ function injectStyles() {
 .mll-name {
     flex: 1 1 0;
     min-width: 150px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    direction: rtl;
-    text-align: left;
+    display: flex;
+    align-items: center;
     padding: 0 4px;
     cursor: pointer;
     font-size: 11px;
     line-height: 24px;
     color: #ddd;
+}
+
+.mll-name bdi {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
 }
 
 .mll-name:hover {
@@ -296,13 +303,20 @@ function injectStyles() {
 
 .mll-info-badge {
     color: #888;
-    font-size: 10px;
-    margin-left: 2px;
+    font-size: 11px;
+    font-weight: 900;
+    margin-left: 4px;
+    flex: 0 0 auto;
     cursor: pointer;
+    text-shadow: 0 0 1px currentColor;
 }
 
 .mll-info-badge.mll-info-civitai {
     color: #4CAF50;
+}
+
+.mll-info-badge.mll-info-notfound {
+    text-decoration: line-through;
 }
 `;
     document.head.appendChild(style);
@@ -422,22 +436,25 @@ app.registerExtension({
         };
 
         /**
-         * Appends an info badge to a BDI element if the info warrants one.
-         * @param {HTMLElement} bdi
+         * Updates an existing info badge's color/title based on info.
+         * Green when any info (Civitai or local) is available, gray otherwise.
+         * @param {HTMLElement} badge
          * @param {object|null} info
          */
-        const appendInfoBadge = (bdi, info) => {
-            if (!info?.raw?.civitai && !info?.hasInfoFile) return;
-            const badge = document.createElement("span");
-            badge.className = "mll-info-badge";
-            badge.textContent = " \u24D8";  // circled i
-            badge.title = info?.raw?.civitai
+        const updateInfoBadge = (badge, info) => {
+            const civitai = info?.raw?.civitai;
+            const fetched = !!civitai;
+            // Civitai's by-hash endpoint returns an { error } payload (and no
+            // modelId) when the model isn't found.
+            const notFound = fetched && (!!civitai.error || !civitai.modelId);
+            const found = fetched && !notFound;
+            badge.classList.toggle("mll-info-civitai", found);
+            badge.classList.toggle("mll-info-notfound", notFound);
+            badge.title = found
                 ? "Civitai info available"
-                : "Local info available";
-            if (info?.raw?.civitai) {
-                badge.classList.add("mll-info-civitai");
-            }
-            bdi.appendChild(badge);
+                : notFound
+                    ? "Model not found on Civitai"
+                    : "No Civitai info";
         };
 
         /**
@@ -834,16 +851,46 @@ app.registerExtension({
                 nameEl.title = "LoRA file not found";
             }
 
-            // ── Info badge (cache-first to avoid blink on rebuild) ──
+            // ── Info badge (always shown for real LoRAs) ──
+            // Opens the LoRA info dialog and refreshes the cache on close.
+            const openInfoDialog = async () => {
+                const dialog = await showLoraInfo(row.lora);
+                if (dialog) {
+                    dialog.addEventListener("close", async () => {
+                        const svc = await getLoraInfoService();
+                        if (svc) {
+                            // Read cached info without forcing a refresh —
+                            // passing refresh=true here would trigger a
+                            // Civitai fetch on close even if the user never
+                            // clicked "fetch info from civitai".
+                            const info = await svc.getInfo(row.lora, false, true);
+                            _loraInfoCache.set(row.lora, info);
+                            rebuildFn();
+                        }
+                    });
+                }
+            };
             if (row.lora && row.lora !== "None") {
+                const badge = document.createElement("span");
+                badge.className = "mll-info-badge";
+                badge.textContent = "\u24D8";  // circled i
+                badge.title = "No LoRA info";
+                badge.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    openInfoDialog();
+                });
+                nameEl.appendChild(badge);
+
+                // Color the badge green when info is available (cache-first
+                // to avoid blink on rebuild).
                 if (_loraInfoCache.has(row.lora)) {
-                    appendInfoBadge(bdi, _loraInfoCache.get(row.lora));
+                    updateInfoBadge(badge, _loraInfoCache.get(row.lora));
                 } else {
                     getLoraInfoService().then(svc => {
                         if (!svc) return;
                         svc.getInfo(row.lora, false, true).then(info => {
                             _loraInfoCache.set(row.lora, info);
-                            appendInfoBadge(bdi, info);
+                            updateInfoBadge(badge, info);
                         });
                     });
                 }
@@ -872,19 +919,7 @@ app.registerExtension({
                 e.stopPropagation();
                 if (row.lora && row.lora !== "None") {
                     new LiteGraph.ContextMenu(
-                        [{ content: "Show LoRA Info", callback: async () => {
-                            const dialog = await showLoraInfo(row.lora);
-                            if (dialog) {
-                                dialog.addEventListener("close", async () => {
-                                    const svc = await getLoraInfoService();
-                                    if (svc) {
-                                        const info = await svc.getInfo(row.lora, true, true);
-                                        _loraInfoCache.set(row.lora, info);
-                                        rebuildFn();
-                                    }
-                                });
-                            }
-                        }}],
+                        [{ content: "Show LoRA Info", callback: openInfoDialog }],
                         { event: e, title: formatLoraName(row.lora) }
                     );
                 }
